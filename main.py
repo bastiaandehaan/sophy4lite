@@ -1,39 +1,49 @@
+# main.py
 import argparse
 import logging
-from data.data_loader import fetch_data
-from backtest import run_backtest
+from backtest.data_loader import fetch_historical_data as fetch_data
+from backtest.backtest import run_backtest, metrics
 from strategies import get_strategy
-from live.live_trading import start_live_loop
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sophy4lite")
 
+def main():
+    p = argparse.ArgumentParser(description="Sophy4Lite")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    b = sub.add_parser("backtest", help="Run backtest")
+    b.add_argument("--strategy", required=True, choices=["bollong", "simple_ob"])
+    b.add_argument("--symbol", required=True)
+    b.add_argument("--timeframe", default="H1")
+    b.add_argument("--days", type=int, default=200)
+    b.add_argument("--start", type=str, help="YYYY-MM-DD (optioneel)")
+
+    l = sub.add_parser("live", help="(placeholder) Live trading")
+    l.add_argument("--strategy", required=True, choices=["bollong", "simple_ob"])
+    l.add_argument("--symbol", required=True)
+    l.add_argument("--timeframe", default="H1")
+
+    args = p.parse_args()
+
+    if args.cmd == "backtest":
+        # fetch_data uit jouw backtest/data_loader.py ondersteunt start
+        df = fetch_data(symbol=args.symbol, timeframe=args.timeframe, days=args.days, end_date=None)
+        strat = get_strategy(args.strategy)
+        entries, sl, tp = strat.generate_signals(df)
+        pf = run_backtest(df, entries, sl, tp, freq=args.timeframe, slippage=0.0002)
+        m = metrics(pf)
+        logger.info(f"Backtest metrics: {m}")
+        try:
+            from utils.plotting import plot_equity_and_drawdown, plot_trades_on_price
+            plot_equity_and_drawdown(pf, outpath="output/equity_dd.png")
+            plot_trades_on_price(pf, outpath="output/trades.png")
+            logger.info("Saved plots to output/equity_dd_*.png and output/trades.png")
+        except Exception as e:
+            logger.warning(f"Plotting skipped: {e}")
+
+    elif args.cmd == "live":
+        logger.info("Live loop placeholder. Eerst backtests afronden.")
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sophy4Lite")
-    subparsers = parser.add_subparsers(dest="command", help="Sub-commands")
-
-    # Backtest command
-    backtest_parser = subparsers.add_parser("backtest", help="Run backtest")
-    backtest_parser.add_argument("--strategy", required=True, choices=["bollong", "simple_ob"], help="Strategy name")
-    backtest_parser.add_argument("--symbol", required=True, help="Trading symbol")
-    backtest_parser.add_argument("--timeframe", default="H1", help="Timeframe (default: H1)")
-    backtest_parser.add_argument("--days", type=int, default=200, help="How many days of data to fetch")
-    backtest_parser.add_argument("--start", type=str, help="Optional start date (format: YYYY-MM-DD)")
-
-    # Live trading command
-    live_parser = subparsers.add_parser("live", help="Run live trading")
-    live_parser.add_argument("--strategy", required=True, choices=["bollong", "simple_ob"], help="Strategy name")
-    live_parser.add_argument("--symbol", required=True, help="Trading symbol")
-    live_parser.add_argument("--timeframe", default="H1", help="Timeframe (default: H1)")
-
-    args = parser.parse_args()
-
-    if args.command == "backtest":
-        df = fetch_data(symbol=args.symbol, timeframe=args.timeframe, days=args.days, start=args.start)
-        strategy = get_strategy(args.strategy)
-        portfolio = strategy.run(df)
-        run_backtest(df, portfolio.entries, portfolio.sl_stop, portfolio.tp_stop)
-    elif args.command == "live":
-        start_live_loop(args.strategy, args.symbol, args.timeframe)
-    else:
-        parser.print_help()
+    main()
