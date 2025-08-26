@@ -16,5 +16,5 @@ STOP_AFTER_LOSSES: int = 2     # consecutive losing trades per day
 LOG_LEVEL: str = "INFO"
 
 import logging, os, sys
-from utils.logging_setup import setup_logging
+from utils.metrics import setup_logging
 logger = setup_logging(level=LOG_LEVEL, logfile=os.path.join(OUTPUT_DIR, "sophy4lite.log"))

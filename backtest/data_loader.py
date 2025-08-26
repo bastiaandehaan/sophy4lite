@@ -1,36 +1,38 @@
-from datetime import datetime
-from typing import Optional
+from __future__ import annotations
 import pandas as pd
-import MetaTrader5 as mt5
+from pathlib import Path
 
+class DataError(Exception):
+    pass
 
-def fetch_data(symbol: str, timeframe: str, days: int = 365, start: Optional[str] = None) -> pd.DataFrame:
-    if not mt5.initialize():
-        raise RuntimeError("MT5 initialize failed")
+def fetch_data(symbol: str, timeframe: str, start: str, end: str, csv_path: Path | None) -> pd.DataFrame:
+    """Load OHLCV data; for now, from a CSV with columns: time, open, high, low, close, volume.
+    Index is datetime (UTC). Filters by [start, end].
+    """
+    if csv_path is None:
+        raise DataError("csv_path is required for now. Provide --csv to CLI.")
 
-    timeframe_map = {
-        "M1": mt5.TIMEFRAME_M1,
-        "M5": mt5.TIMEFRAME_M5,
-        "M15": mt5.TIMEFRAME_M15,
-        "M30": mt5.TIMEFRAME_M30,
-        "H1": mt5.TIMEFRAME_H1,
-        "H4": mt5.TIMEFRAME_H4,
-        "D1": mt5.TIMEFRAME_D1
-    }
+    df = pd.read_csv(csv_path)
+    required = {"time", "open", "high", "low", "close", "volume"}
+    if not required.issubset(df.columns):
+        raise DataError(f"CSV missing columns: {required - set(df.columns)}")
 
-    if timeframe not in timeframe_map:
-        raise ValueError(f"Unsupported timeframe: {timeframe}")
-
-    if start:
-        start_time = datetime.strptime(start, "%Y-%m-%d")
-        rates = mt5.copy_rates_from(symbol, timeframe_map[timeframe], start_time, days * 24)
-    else:
-        rates = mt5.copy_rates_from_pos(symbol, timeframe_map[timeframe], 0, days * 24)
-
-    if rates is None or len(rates) == 0:
-        raise ValueError("Failed to fetch data from MT5")
-
-    df = pd.DataFrame(rates)
-    df['time'] = pd.to_datetime(df['time'], unit='s')
-    df.set_index('time', inplace=True)
+    df["time"] = pd.to_datetime(df["time"], utc=True)
+    df = df.set_index("time").sort_index()
+    df = df.loc[start:end]
     return df
+```
+
+---
+
+## strategies/base.py
+```python
+from __future__ import annotations
+from typing import Protocol, Dict, Any
+import pandas as pd
+
+class Strategy(Protocol):
+    def generate_signals(self, df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
+        """Return a DataFrame with columns: entry, exit, sl, tp (floats or NaN)."""
+        ...
+```

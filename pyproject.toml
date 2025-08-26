@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sophy4lite"
+version = "0.1.0"
+description = "Lite trading bot with OB strategy, optimizer and FTMO guardrails"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "typer>=0.12",
+  "pydantic>=2.8",
+  "rich>=13.7",
+]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I"]
