@@ -5,35 +5,57 @@ import pandas as pd
 TRADING_DAYS = 252
 
 
-def equity_sharpe(df_eq: pd.DataFrame) -> float:
-    ret = df_eq["equity"].pct_change().dropna()
-    if ret.std(ddof=0) == 0 or len(ret) < 2:
+def _equity_series(df_eq: pd.DataFrame) -> pd.Series:
+    if "equity" not in df_eq.columns:
+        raise KeyError("Column 'equity' ontbreekt in equity DataFrame")
+    s = pd.Series(df_eq["equity"], dtype="float64").dropna()
+    if s.empty:
+        raise ValueError("Lege equity-reeks ontvangen")
+    return s
+
+
+def equity_sharpe(
+    df_eq: pd.DataFrame,
+    risk_free: float = 0.0,
+    periods_per_year: int = TRADING_DAYS,
+) -> float:
+    s = _equity_series(df_eq)
+    rets = s.pct_change().dropna()
+    if rets.size < 2:
         return 0.0
-    return float(ret.mean() / ret.std(ddof=0) * np.sqrt(TRADING_DAYS))
+    ex = rets - (risk_free / periods_per_year)
+    std = ex.std(ddof=1)
+    if std <= 1e-12:
+        return float("inf") if ex.mean() > 0 else 0.0
+    return float(ex.mean() / std * np.sqrt(periods_per_year))
 
 
 def equity_max_dd_and_duration(df_eq: pd.DataFrame) -> tuple[float, int]:
-    eq = df_eq["equity"].to_numpy()
-    roll_max = np.maximum.accumulate(eq)
-    dd = eq / roll_max - 1.0
-    max_dd = dd.min() if len(dd) else 0.0
-    # duration in bars of the longest drawdown spell
-    dur = 0
-    max_dur = 0
-    for x in dd:
-        if x < 0:
-            dur += 1
-            if dur > max_dur:
-                max_dur = dur
+    s = _equity_series(df_eq)
+    v = s.values.astype("float64")
+    run_max = np.maximum.accumulate(v)
+    dd = v / run_max - 1.0
+    max_dd_signed = float(dd.min())
+
+    duration = 0
+    max_duration = 0
+    peak = v[0]
+    for x in v:
+        if x >= peak:
+            peak = x
+            duration = 0
         else:
-            dur = 0
-    return abs(float(max_dd)), int(max_dur)
+            duration += 1
+            max_duration = max(max_duration, duration)
+
+    return abs(max_dd_signed), int(max_duration)
 
 
-def summarize_equity_metrics(df_eq: pd.DataFrame, trades: pd.DataFrame) -> dict:
+def summarize_equity_metrics(df_eq: pd.DataFrame, trades: pd.DataFrame | None) -> dict:
+    s = _equity_series(df_eq)
     sharpe = equity_sharpe(df_eq)
     max_dd, dd_dur = equity_max_dd_and_duration(df_eq)
-    total_ret = float(df_eq["equity"].iloc[-1] / df_eq["equity"].iloc[0] - 1.0)
+    total_ret = float(s.iloc[-1] / s.iloc[0] - 1.0)
     n_trades = int(len(trades)) if trades is not None else 0
     return {
         "sharpe": sharpe,

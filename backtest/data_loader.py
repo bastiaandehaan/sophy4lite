@@ -1,39 +1,37 @@
 from __future__ import annotations
-from pathlib import Path
+import numpy as np
 import pandas as pd
+from pathlib import Path
 
 
-def fetch_data(
-    *,
-    symbol: str,
-    timeframe: str,
-    start: str | None = None,
-    end: str | None = None,
-    csv_path: str | Path | None = None,
-) -> pd.DataFrame:
-    """Load OHLCV data from CSV and filter on date range.
-
-    CSV schema (required):
-        time, open, high, low, close, volume
+def fetch_data(csv_path: str | Path) -> pd.DataFrame:
     """
-    if csv_path is None:
-        raise ValueError("csv_path is required for data loading")
+    Leest OHLC(V) CSV en geeft DataFrame met DatetimeIndex (UTC).
+    Vereist kolommen: open, high, low, close. Volume optioneel.
+    """
+    csv_path = Path(csv_path)
+    df = pd.read_csv(csv_path)
 
-    df = pd.read_csv(csv_path, parse_dates=["time"])
-    if "time" not in df.columns:
-        raise ValueError("CSV must contain a 'time' column (UTC timestamps)")
+    # tijdkolom detecteren
+    for col in ("date", "datetime", "timestamp", "time"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+            df = df.dropna(subset=[col]).set_index(col)
+            break
+    else:
+        raise KeyError("CSV mist tijdkolom: date/datetime/timestamp/time")
 
-    df = df.set_index("time").sort_index()
-
-    if start:
-        df = df.loc[pd.Timestamp(start) :]
-    if end:
-        df = df.loc[: pd.Timestamp(end)]
-
-    # keep only needed columns; rename/standardize if needed
-    needed = ["open", "high", "low", "close", "volume"]
-    missing = [c for c in needed if c not in df.columns]
+    # kolommen normaliseren
+    df = df.rename(columns={c: c.lower() for c in df.columns})
+    required = ["open", "high", "low", "close"]
+    missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"CSV missing columns: {missing}")
+        raise KeyError(f"Vereiste kolommen ontbreken: {missing}")
 
-    return df[needed].copy()
+    if "volume" not in df.columns:
+        df["volume"] = np.nan
+
+    df = df.sort_index()
+    df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df = df[~df.index.duplicated(keep="last")]
+    return df
