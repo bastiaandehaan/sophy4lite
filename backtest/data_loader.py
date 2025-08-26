@@ -1,38 +1,39 @@
 from __future__ import annotations
-import pandas as pd
 from pathlib import Path
+import pandas as pd
 
-class DataError(Exception):
-    pass
 
-def fetch_data(symbol: str, timeframe: str, start: str, end: str, csv_path: Path | None) -> pd.DataFrame:
-    """Load OHLCV data; for now, from a CSV with columns: time, open, high, low, close, volume.
-    Index is datetime (UTC). Filters by [start, end].
+def fetch_data(
+    *,
+    symbol: str,
+    timeframe: str,
+    start: str | None = None,
+    end: str | None = None,
+    csv_path: str | Path | None = None,
+) -> pd.DataFrame:
+    """Load OHLCV data from CSV and filter on date range.
+
+    CSV schema (required):
+        time, open, high, low, close, volume
     """
     if csv_path is None:
-        raise DataError("csv_path is required for now. Provide --csv to CLI.")
+        raise ValueError("csv_path is required for data loading")
 
-    df = pd.read_csv(csv_path)
-    required = {"time", "open", "high", "low", "close", "volume"}
-    if not required.issubset(df.columns):
-        raise DataError(f"CSV missing columns: {required - set(df.columns)}")
+    df = pd.read_csv(csv_path, parse_dates=["time"])
+    if "time" not in df.columns:
+        raise ValueError("CSV must contain a 'time' column (UTC timestamps)")
 
-    df["time"] = pd.to_datetime(df["time"], utc=True)
     df = df.set_index("time").sort_index()
-    df = df.loc[start:end]
-    return df
-```
 
----
+    if start:
+        df = df.loc[pd.Timestamp(start) :]
+    if end:
+        df = df.loc[: pd.Timestamp(end)]
 
-## strategies/base.py
-```python
-from __future__ import annotations
-from typing import Protocol, Dict, Any
-import pandas as pd
+    # keep only needed columns; rename/standardize if needed
+    needed = ["open", "high", "low", "close", "volume"]
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV missing columns: {missing}")
 
-class Strategy(Protocol):
-    def generate_signals(self, df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
-        """Return a DataFrame with columns: entry, exit, sl, tp (floats or NaN)."""
-        ...
-```
+    return df[needed].copy()

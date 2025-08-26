@@ -1,11 +1,4 @@
-from .bollong import BollongStrategy
-from .simple_order_block import SimpleOrderBlockStrategy
-STRATEGIES = {
-    "bollong": BollongStrategy,
-    "simple_ob": SimpleOrderBlockStrategy
-}
-def get_strategy(name: str, **kwargs):
-    key = name.lower()
-    if key not in STRATEGIES:
-        raise KeyError(f"Unknown strategy {name}")
-    return STRATEGIES[key](**kwargs)
+# strategies/__init__.py
+from .order_block import order_block_signals  # exporteer alleen wat je nu gebruikt
+
+__all__ = ["order_block_signals"]

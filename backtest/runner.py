@@ -1,110 +1,109 @@
 from __future__ import annotations
+
 from typing import Dict, Any, Tuple
 import numpy as np
 import pandas as pd
 
 from backtest.data_loader import fetch_data
-from strategies.order_block import order_block_signals
+from strategies.order_block import order_block_signals  # jouw signaal-functie
 from risk.ftmo import pretrade_checks
 
 
 def run_backtest(
+    *,
     strategy_name: str,
     params: Dict[str, Any],
     symbol: str,
     timeframe: str,
     start: str,
     end: str,
-    csv_path=None,
+    csv_path: str | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = fetch_data(symbol, timeframe, start, end, csv_path)
+    """Eenvoudige backtest-engine met SL/TP.
 
+    Returns:
+        df_eq: DataFrame(index=time, columns=['equity'])
+        df_trades: DataFrame met trade-records (time, side, entry, sl, tp, exit, pnl)
+    """
+    # ----- data -----
+    df = fetch_data(
+        symbol=symbol,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        csv_path=csv_path,
+    )
+
+    # ----- signalen -----
     if strategy_name == "order_block_simple":
-        sig = order_block_signals(df, params)
+        entries, exits, sl_series, tp_series = order_block_signals(df, **params)
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
-    # Simple SL/TP engine, 1 trade per signal timestamp
-    equity = [1_0000.0]
-    eq_index = []
+    # sanity
+    if not isinstance(entries, pd.Series) or not isinstance(exits, pd.Series):
+        raise TypeError("entries/exits must be pd.Series aligned to df.index")
+
+    entries = entries.reindex(df.index, fill_value=False)
+    exits = exits.reindex(df.index, fill_value=False)
+    sl_series = sl_series.reindex(df.index)
+    tp_series = tp_series.reindex(df.index)
+
+    # ----- risk checks (placeholder) -----
+    if not pretrade_checks(balance=10_000.0):
+        # in deze simpele engine blokkeren we niets, maar hook is aanwezig
+        pass
+
+    # ----- backtest loop -----
+    cash = 10_000.0
+    position = 0  # 0/1 long-only voor nu
+    entry_price = None
+    sl = None
+    tp = None
+
+    equity = [cash]
+    eq_index = [df.index[0]]
     trades = []
 
-    balance = equity[0]
-    open_pos = None
-
     for ts, row in df.iterrows():
-        price = row["close"]
-        # new entry?
-        if not np.isnan(sig.at[ts, "entry"]) and open_pos is None:
-            entry = float(sig.at[ts, "entry"])
-            sl = float(sig.at[ts, "sl"]) if not np.isnan(sig.at[ts, "sl"]) else None
-            tp = float(sig.at[ts, "tp"]) if not np.isnan(sig.at[ts, "tp"]) else None
+        price = float(row["close"])
 
-            # pre-trade FTMO/risk checks (simplified): max daily loss / total loss are not modeled fully
-            if not pretrade_checks(balance):
-                continue
-            direction = 1.0 if entry <= price else -1.0
-            risk_amt = 0.003 * balance  # 0.3% per trade default risk
-            # position size = risk / (entry - sl) absolute
-            if sl is not None and sl != entry:
-                pos_size = abs(risk_amt / (entry - sl))
-            else:
-                pos_size = 0.0
+        # exit-voorwaarden: signaal, SL of TP
+        if position == 1:
+            # SL/TP check
+            hit_sl = sl is not None and row["low"] <= sl
+            hit_tp = tp is not None and row["high"] >= tp
+            signal_exit = exits.loc[ts]
 
-            open_pos = {
-                "ts": ts,
-                "entry": entry,
-                "sl": sl,
-                "tp": tp,
-                "dir": direction,
-                "size": pos_size,
-            }
+            if hit_sl or hit_tp or signal_exit:
+                pnl = (price - entry_price) if not hit_sl and not hit_tp else \
+                      ((sl - entry_price) if hit_sl else (tp - entry_price))
+                cash += pnl
+                trades.append(
+                    {
+                        "time": ts,
+                        "side": "LONG",
+                        "entry": entry_price,
+                        "sl": sl,
+                        "tp": tp,
+                        "exit": (sl if hit_sl else (tp if hit_tp else price)),
+                        "pnl": pnl,
+                    }
+                )
+                position = 0
+                entry_price = sl = tp = None
 
-        # manage open position
-        if open_pos is not None:
-            hi, lo = row["high"], row["low"]
-            hit_tp = open_pos["tp"] is not None and (
-                (open_pos["dir"] > 0 and hi >= open_pos["tp"]) or (open_pos["dir"] < 0 and lo <= open_pos["tp"])
-            )
-            hit_sl = open_pos["sl"] is not None and (
-                (open_pos["dir"] > 0 and lo <= open_pos["sl"]) or (open_pos["dir"] < 0 and hi >= open_pos["sl"])
-            )
+        # entry-voorwaarde
+        if position == 0 and entries.loc[ts]:
+            position = 1
+            entry_price = price
+            # per-candle SL/TP (kunnen NaN zijn als je dat wilt)
+            sl = float(sl_series.loc[ts]) if pd.notna(sl_series.loc[ts]) else None
+            tp = float(tp_series.loc[ts]) if pd.notna(tp_series.loc[ts]) else None
 
-            exit_px = None
-            outcome = None
-            if hit_tp:
-                exit_px = open_pos["tp"]
-                outcome = "TP"
-            elif hit_sl:
-                exit_px = open_pos["sl"]
-                outcome = "SL"
-
-            if exit_px is not None:
-                pnl = open_pos["dir"] * (exit_px - open_pos["entry"]) * open_pos["size"]
-                balance += pnl
-                trades.append({
-                    "entry_ts": open_pos["ts"],
-                    "exit_ts": ts,
-                    "entry": open_pos["entry"],
-                    "exit": exit_px,
-                    "dir": open_pos["dir"],
-                    "size": open_pos["size"],
-                    "pnl": pnl,
-                    "outcome": outcome,
-                })
-                open_pos = None
-
-        equity.append(balance)
+        equity.append(cash if position == 0 else cash + (price - entry_price))
         eq_index.append(ts)
 
-    df_eq = pd.DataFrame(index=pd.Index(eq_index, name="time"), data={"equity": equity[1:]})
+    df_eq = pd.DataFrame(index=pd.Index(eq_index, name="time"), data={"equity": equity})
     df_trades = pd.DataFrame(trades)
     return df_eq, df_trades
-
-## risk/ftmo.py
-from __future__ import annotations
-
-def pretrade_checks(balance: float) -> bool:
-    # Placeholder: in backtest we don’t track intraday PnL yet. Always True for now.
-    # Extend with daily loss / total loss simulation if you add timestamped PnL aggregation.
-    return True
