@@ -100,12 +100,8 @@ def run_backtest(
     df_eq = pd.DataFrame(index=pd.Index(eq_index, name="time"), data={"equity": equity[1:]})
     df_trades = pd.DataFrame(trades)
     return df_eq, df_trades
-```
-
----
 
 ## risk/ftmo.py
-```python
 from __future__ import annotations
 
 def pretrade_checks(balance: float) -> bool:
