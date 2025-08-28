@@ -9,7 +9,6 @@ import pandas as pd
 
 from backtest.runner import run_backtest
 from backtest.runner_vbt import run_backtest_vbt
-from utils.metrics import summarize_equity_metrics
 
 from strategies.breakout_signals import BreakoutParams, DEFAULT_SPECS, SymbolSpec
 from backtest.breakout_exec import backtest_breakout, BTExecCfg
@@ -28,42 +27,40 @@ def backtest(
     engine: str = typer.Option("native", help="Backtest engine: native or vbt"),
 ):
     """Run a backtest with either the native or vectorbt engine."""
+    params = {"lookback_bos": 20}  # Vereenvoudigd; pas aan als nodig
     if engine == "native":
-        df_eq, trades = run_backtest(
+        df_eq, trades, metrics = run_backtest(
             strategy_name="order_block_simple",
-            params={"lookback_bos": 20, "min_body_pct": 0.55},
+            params=params,
             symbol=symbol,
             timeframe=timeframe,
             start=start,
             end=end,
             csv=csv,
         )
-        metrics = summarize_equity_metrics(df_eq, trades)
-
     elif engine == "vbt":
         df_eq, trades, metrics = run_backtest_vbt(
             strategy_name="order_block_simple",
-            params={"fast": 10, "slow": 20},
+            params=params,
             symbol=symbol,
             timeframe=timeframe,
             start=start,
             end=end,
-            csv=csv,
+            csv_path=csv,
         )
     else:
         raise ValueError("engine must be 'native' or 'vbt'")
 
-    table = Table(title=f"Backtest Summary ({engine})")
-    for col in ["sharpe", "max_dd", "dd_duration", "total_return", "n_trades"]:
-        table.add_column(col)
-    table.add_row(
-        f"{metrics['sharpe']:.2f}",
-        f"{metrics['max_dd']:.2%}",
-        f"{metrics['dd_duration']}",
-        f"{metrics['total_return']:.2%}",
-        f"{metrics['n_trades']}",
-    )
-    console.print(table)
+    tbl = Table(title=f"Backtest Summary ({engine})")
+    tbl.add_column("Metric"); tbl.add_column("Value", justify="right")
+    for k in ["final_equity","return_total_pct","n_trades","winrate_pct","avg_rr","sharpe","max_drawdown_pct"]:
+        v = metrics.get(k, 0.0); tbl.add_row(k, f"{v:,.4f}" if isinstance(v,(int,float)) else str(v))
+    console.print(tbl)
+
+    out = Path("outputs"); out.mkdir(exist_ok=True)
+    df_eq.to_csv(out/"equity.csv")
+    trades.to_csv(out/"trades.csv", index=False)
+    console.print(f"[green]Saved[/green] {out/'equity.csv'} and {out/'trades.csv'}")
 
 
 @app.command(help="Breakout backtest (close-confirm or pending-stop) with ATR RR, FTMO guards, and proper TZ.")
@@ -143,7 +140,6 @@ def breakout(
     eq.to_csv(out/"equity_breakout.csv")
     trades.to_csv(out/"trades_breakout.csv", index=False)
     console.print(f"[green]Saved[/green] {out/'equity_breakout.csv'} and {out/'trades_breakout.csv'}")
-
 
 if __name__ == "__main__":
     app()

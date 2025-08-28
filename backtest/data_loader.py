@@ -2,24 +2,33 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from typing import Optional
 
-
-def fetch_data(csv_path: str | Path) -> pd.DataFrame:
+def fetch_data(
+    csv_path: Optional[str | Path] = None,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
     """
-    Leest OHLC(V) CSV en geeft DataFrame met DatetimeIndex (UTC).
+    Laadt OHLC(V) data van CSV of (placeholder) MT5.
     Vereist kolommen: open, high, low, close. Volume optioneel.
     """
-    csv_path = Path(csv_path)
-    df = pd.read_csv(csv_path)
-
-    # tijdkolom detecteren
-    for col in ("date", "datetime", "timestamp", "time"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
-            df = df.dropna(subset=[col]).set_index(col)
-            break
+    if csv_path:
+        csv_path = Path(csv_path)
+        df = pd.read_csv(csv_path)
+        # tijdkolom detecteren
+        for col in ("date", "datetime", "timestamp", "time"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+                df = df.dropna(subset=[col]).set_index(col)
+                break
+        else:
+            raise KeyError("CSV mist tijdkolom: date/datetime/timestamp/time")
     else:
-        raise KeyError("CSV mist tijdkolom: date/datetime/timestamp/time")
+        # Placeholder voor MT5 fetch (implementeer als nodig)
+        raise NotImplementedError("MT5 data fetch nog niet geïmplementeerd; gebruik CSV.")
 
     # kolommen normaliseren
     df = df.rename(columns={c: c.lower() for c in df.columns})
@@ -34,4 +43,11 @@ def fetch_data(csv_path: str | Path) -> pd.DataFrame:
     df = df.sort_index()
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
     df = df[~df.index.duplicated(keep="last")]
+
+    # Filter op start/end als gegeven
+    if start:
+        df = df.loc[pd.Timestamp(start):]
+    if end:
+        df = df.loc[:pd.Timestamp(end)]
+
     return df

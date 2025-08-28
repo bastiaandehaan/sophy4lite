@@ -3,8 +3,9 @@ import pandas as pd
 import vectorbt as vbt
 from typing import Dict, Any, Tuple
 
+from backtest.data_loader import fetch_data
+from strategies.order_block import order_block_signals
 from utils.metrics import summarize_equity_metrics
-
 
 def run_backtest_vbt(
     strategy_name: str,
@@ -18,26 +19,16 @@ def run_backtest_vbt(
     """Run backtest using vectorbt.
     Returns (equity_df, trades_df, metrics_dict).
     """
-
-    if csv_path is None:
-        raise ValueError("csv_path is required for vectorbt runner")
-
-    # Load CSV (expected columns: time, open, high, low, close, volume)
-    df = pd.read_csv(csv_path, parse_dates=["time"])
-    df = df.set_index("time").sort_index()
-    df = df.loc[start:end]
-
-    close = df["close"]
+    df = fetch_data(csv_path=csv_path, symbol=symbol, timeframe=timeframe, start=start, end=end)
 
     if strategy_name == "order_block_simple":
-        # ⚠️ Voor nu placeholder: simpele MA cross om pipeline te testen
-        fast = close.vbt.rolling_mean(window=params.get("fast", 10))
-        slow = close.vbt.rolling_mean(window=params.get("slow", 20))
-        entries = fast > slow
-        exits = fast < slow
+        signals = order_block_signals(df, swing_w=params.get("lookback_bos", 3))
+        entries = signals["long"]
+        exits = ~signals["long"]  # Simpele exit op ~long
     else:
         raise ValueError(f"Strategy not implemented in VBT runner: {strategy_name}")
 
+    close = df["close"]
     pf = vbt.Portfolio.from_signals(
         close,
         entries,
@@ -47,8 +38,8 @@ def run_backtest_vbt(
         slippage=0.0001,
     )
 
-    equity = pf.value()
+    equity = pf.value().to_frame("equity")
     trades = pf.trades.records_readable
-    metrics = summarize_equity_metrics(pd.DataFrame({"equity": equity}), trades)
+    metrics = summarize_equity_metrics(equity, trades)
 
-    return pd.DataFrame({"equity": equity}), trades, metrics
+    return equity, trades, metrics

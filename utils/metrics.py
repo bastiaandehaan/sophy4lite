@@ -4,7 +4,6 @@ import pandas as pd
 
 TRADING_DAYS = 252
 
-
 def _equity_series(df_eq: pd.DataFrame) -> pd.Series:
     if "equity" not in df_eq.columns:
         raise KeyError("Column 'equity' ontbreekt in equity DataFrame")
@@ -12,7 +11,6 @@ def _equity_series(df_eq: pd.DataFrame) -> pd.Series:
     if s.empty:
         raise ValueError("Lege equity-reeks ontvangen")
     return s
-
 
 def equity_sharpe(
     df_eq: pd.DataFrame,
@@ -28,7 +26,6 @@ def equity_sharpe(
     if std <= 1e-12:
         return float("inf") if ex.mean() > 0 else 0.0
     return float(ex.mean() / std * np.sqrt(periods_per_year))
-
 
 def equity_max_dd_and_duration(df_eq: pd.DataFrame) -> tuple[float, int]:
     s = _equity_series(df_eq)
@@ -50,17 +47,26 @@ def equity_max_dd_and_duration(df_eq: pd.DataFrame) -> tuple[float, int]:
 
     return abs(max_dd_signed), int(max_duration)
 
-
-def summarize_equity_metrics(df_eq: pd.DataFrame, trades: pd.DataFrame | None) -> dict:
+def summarize_equity_metrics(df_eq: pd.DataFrame, trades: pd.DataFrame | None = None) -> dict:
     s = _equity_series(df_eq)
     sharpe = equity_sharpe(df_eq)
     max_dd, dd_dur = equity_max_dd_and_duration(df_eq)
-    total_ret = float(s.iloc[-1] / s.iloc[0] - 1.0)
+    total_ret = float(s.iloc[-1] / s.iloc[0] - 1.0) if len(s) >= 2 else 0.0
     n_trades = int(len(trades)) if trades is not None else 0
+    winrate = float((trades["pnl_cash"] > 0).mean() * 100.0) if trades is not None and "pnl_cash" in trades.columns and not trades.empty else 0.0
+    avg_rr = float((trades["tp_pts"] / trades["sl_pts"]).mean()) if trades is not None and "tp_pts" in trades.columns and not trades.empty else 0.0
+    final_equity = float(s.iloc[-1]) if not s.empty else 0.0
+    return_total_pct = total_ret * 100.0
+    max_drawdown_pct = max_dd * 100.0
     return {
         "sharpe": sharpe,
         "max_dd": max_dd,
         "dd_duration": dd_dur,
         "total_return": total_ret,
         "n_trades": n_trades,
+        "winrate_pct": winrate,
+        "avg_rr": avg_rr,
+        "final_equity": final_equity,
+        "return_total_pct": return_total_pct,
+        "max_drawdown_pct": max_drawdown_pct,
     }

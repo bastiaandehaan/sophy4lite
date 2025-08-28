@@ -4,7 +4,7 @@ from typing import Optional
 
 from backtest.data_loader import fetch_data
 from strategies.order_block import order_block_signals
-
+from utils.metrics import summarize_equity_metrics
 
 def run_backtest(
     *,
@@ -23,13 +23,11 @@ def run_backtest(
     Backtest runner die werkt met cli.main backtest.
     Laadt zelf data via data_loader.fetch_data of CSV.
     """
-
-    # Data laden
-    df = fetch_data(symbol=symbol, timeframe=timeframe, start=start, end=end, csv=csv)
-    if df is None or "close" not in df.columns:
+    df = fetch_data(csv_path=csv, symbol=symbol, timeframe=timeframe, start=start, end=end)
+    if df.empty or "close" not in df.columns:
         raise ValueError("Kon geen geldige data laden, 'close' kolom ontbreekt")
 
-    # Strategie-signalen
+    # Strategie-signalen (verwijder ongebruikte params)
     if strategy_name == "order_block_simple":
         lookback = params.get("lookback_bos", 3) if params else 3
         signals = order_block_signals(df, swing_w=lookback)
@@ -67,8 +65,9 @@ def run_backtest(
 
         ex_px = price.loc[ex] * (1 - ptc)
         cash += units * ex_px
+        pnl = cash - initial_cash  # Vereenvoudigd; pas aan voor breakout-style pnl_cash
         trades[-1].update(
-            {"exit_time": ex, "exit_px": float(ex_px), "pnl": float(cash - initial_cash)}
+            {"exit_time": ex, "exit_px": float(ex_px), "pnl_cash": float(pnl)}
         )
         units = 0.0
 
@@ -89,4 +88,5 @@ def run_backtest(
     )
     trades_df = pd.DataFrame(trades)
 
-    return df_eq, trades_df
+    metrics = summarize_equity_metrics(df_eq, trades_df)
+    return df_eq, trades_df, metrics

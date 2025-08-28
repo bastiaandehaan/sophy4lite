@@ -6,6 +6,7 @@ import pandas as pd
 
 from strategies.breakout_signals import BreakoutParams, SymbolSpec, DEFAULT_SPECS, daily_levels, confirm_pass
 from risk.ftmo_guard import FtmoGuard, FtmoRules
+from utils.metrics import summarize_equity_metrics  # Gebruik gecentraliseerde metrics
 
 @dataclass
 class BTExecCfg:
@@ -30,19 +31,6 @@ def _size(equity: float, entry: float, stop: float, vpp: float, risk_frac: float
 def _fees(notional: float, rate: float) -> float:
     return float(abs(notional) * rate)
 
-def _sharpe_daily(eq: pd.Series) -> float:
-    r = eq.pct_change().dropna()
-    if r.size < 2:
-        return 0.0
-    sd = r.std(ddof=1)
-    if sd == 0:
-        return 0.0
-    return float(np.sqrt(252.0) * (r.mean() / sd))
-
-def _max_dd(eq: pd.Series) -> float:
-    roll = eq.cummax()
-    return float(((eq / roll) - 1.0).min())
-
 def backtest_breakout(
     df: pd.DataFrame,
     symbol: str,
@@ -62,7 +50,6 @@ def backtest_breakout(
     df = _tz_df(df, p.broker_tz)
     vpp = x.specs[symbol].value_per_point
 
-    # éénmalig TZ/DST gefixt; levels berekenen zonder nogmaals TZ te wijzigen
     levels = daily_levels(df, symbol, p)
 
     equity = float(x.equity0)
@@ -181,20 +168,7 @@ def backtest_breakout(
         guard.update_equity(equity)
         daily_eq[dts] = equity
 
-    eq = pd.Series(daily_eq).sort_index()
+    eq_df = pd.Series(daily_eq).sort_index().to_frame("equity")
     trades_df = pd.DataFrame(trades)
-
-    # extra metrics: winrate en gemiddelde R:R (tp_pts/sl_pts)
-    winrate = float((trades_df["pnl_cash"] > 0).mean()) * 100.0 if not trades_df.empty else 0.0
-    avg_rr = float((trades_df["tp_pts"] / trades_df["sl_pts"]).mean()) if not trades_df.empty else 0.0
-
-    metrics = {
-        "final_equity": float(eq.iloc[-1]) if not eq.empty else x.equity0,
-        "return_total_pct": float(((eq.iloc[-1] / eq.iloc[0]) - 1.0) * 100.0) if len(eq) >= 2 else 0.0,
-        "n_trades": int(len(trades_df)),
-        "sharpe": _sharpe_daily(eq),
-        "max_drawdown_pct": float(_max_dd(eq) * 100.0) if len(eq) >= 2 else 0.0,
-        "winrate_pct": winrate,
-        "avg_rr": avg_rr,
-    }
-    return eq, trades_df, metrics
+    metrics = summarize_equity_metrics(eq_df, trades_df)  # Gebruik gecentraliseerde metrics
+    return eq_df["equity"], trades_df, metrics
