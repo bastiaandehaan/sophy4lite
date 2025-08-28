@@ -12,10 +12,10 @@ class SymbolSpec:
     value_per_point: float
     min_tick: float
 
-DEFAULT_SPECS: Dict[str, SymbolSpec] = {
-    "DE40": SymbolSpec(1.0, 0.1),   # veel brokers voor DAX cash/CFD
-    "DAX":  SymbolSpec(25.0, 0.5),  # future-equivalent
-    "US30": SymbolSpec(1.0, 1.0),
+DEFAULT_SPECS = {    "DE40": SymbolSpec(value_per_point=1.0, min_tick=0.1),
+    "GER40": SymbolSpec(value_per_point=1.0, min_tick=0.1),  # Voor FTMO
+    "GER40.cash": SymbolSpec(value_per_point=1.0, min_tick=0.1),  # Voor FTMO
+
 }
 
 @dataclass

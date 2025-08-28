@@ -16,10 +16,22 @@ STOP_AFTER_LOSSES: int = 2     # consecutive losing trades per day
 
 # --- Logging ---
 LOG_LEVEL: str = "INFO"
-logging.basicConfig(
-    level=LOG_LEVEL,
-    filename=os.path.join(OUTPUT_DIR, "sophy4lite.log"),
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
+
+# Maak logger en configureer handlers
 logger = logging.getLogger(__name__)
+logger.setLevel(LOG_LEVEL)
+
+# File handler voor logbestand
+file_handler = logging.FileHandler(os.path.join(OUTPUT_DIR, "sophy4lite.log"))
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(file_formatter)
+
+# Stream handler voor console
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(LOG_LEVEL)
+stream_handler.setFormatter(file_formatter)
+
+# Voeg handlers toe aan logger
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
