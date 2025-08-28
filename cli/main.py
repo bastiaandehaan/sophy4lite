@@ -24,7 +24,7 @@ def backtest(
     timeframe: str = typer.Option("M15", help="Timeframe, e.g. M15"),
     start: str = typer.Option(..., help="Start date YYYY-MM-DD"),
     end: str = typer.Option(..., help="End date YYYY-MM-DD"),
-    csv: Optional[Path] = typer.Option("data/15m.csv", help="Path to CSV data file"),
+    csv: Optional[Path] = typer.Option("data/GER40.cash_M15.csv", help="Path to CSV data file"),
     engine: str = typer.Option("native", help="Backtest engine: native or vbt"),
     strategy: str = typer.Option("breakout", help="Strategy: breakout or order_block"),
 ):
@@ -96,7 +96,7 @@ def backtest(
 
 @app.command()
 def breakout(
-    csv: Annotated[Path, typer.Option("--csv", exists=True, help="CSV with time,open,high,low,close[,volume]")] = Path("data/15m.csv"),
+    csv: Annotated[Path, typer.Option("--csv", exists=True, help="CSV with time,open,high,low,close[,volume]")] = Path("data/GER40.cash_M15.csv"),
     symbol: Annotated[str, typer.Option("--symbol", "-s")] = "GER40.cash",
     broker_tz: Annotated[str, typer.Option("--broker-tz")] = "UTC",
     start: Annotated[str | None, typer.Option("--start")] = None,
