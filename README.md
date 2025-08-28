@@ -1,19 +1,19 @@
-# Sophy4 Lite
+# Sophy4Lite
 
-A minimal, FTMO-oriented trading framework using your existing **Bollong** and **Simple Order Block** strategies.
-Focus: simplicity, stability, and strict FTMO guardrails.
+Lean trading-research framework met:
+- **ATR-gebaseerde breakout** (sessie-range → ‘close-confirm’ of ‘pending-stop’)
+- **Realistische backtest**: intra-bar SL/TP op high/low, slippage & fees, %-risico position sizing
+- **FTMO-guards**: daily loss / total loss **voor** entry (pre-trade worst-case check)
+- Eenvoudige **CLI**: `python -m cli.main breakout ...`
 
-## Quick start
+> Doel: **snel valideren of er een edge is** (falsifieerbaar, geen hype), zonder over-engineering.
+
+---
+
+## Installatie
 
 ```bash
-python -m venv .venv && source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+# Windows / Python 3.11
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
-python main.py backtest --strategy bollong --symbol GER40.cash --timeframe H1 --days 365
-python main.py live --strategy bollong --symbol GER40.cash --timeframe H1
-```
-
-## FTMO guardrails (built-in)
-- Max daily loss: 5% of equity (blocks new trades for that day)
-- Max total loss: 10% from starting balance (stops trading)
-- Risk per trade: default 1% (configurable)
-- Stop after 2 consecutive losing trades (daily)

@@ -1,6 +1,20 @@
-vectorbt==0.24.7
-numpy>=1.24
-pandas>=2.0
-MetaTrader5>=5.0
-matplotlib>=3.8
-tqdm>=4.66
+# Core
+pandas>=2.2
+numpy>=1.26
+
+# CLI & UX
+typer>=0.12
+rich>=13.7
+
+# (Optioneel) Live met MT5 in Windows-omgevingen
+MetaTrader5>=5.0.45 ; platform_system == "Windows"
+
+# (Optioneel) Onderzoek/optimalisatie (indien je later een grid/optimizer aankoppelt)
+# scikit-learn>=1.4
+# hyperopt>=0.2.7
+
+# (Optioneel) Tests & tooling
+# pytest>=8.0
+# pytest-cov>=4.1
+# black>=24.4
+# flake8>=7.0

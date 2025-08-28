@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
@@ -8,13 +8,15 @@ from strategies.breakout_signals import BreakoutParams, SymbolSpec, DEFAULT_SPEC
 from risk.ftmo_guard import FtmoGuard, FtmoRules
 from utils.metrics import summarize_equity_metrics  # Gebruik gecentraliseerde metrics
 
+
 @dataclass
 class BTExecCfg:
     equity0: float = 20_000.0
     fee_rate: float = 0.0002          # per side
     slippage_pts: float = 0.5
-    specs: Dict[str, SymbolSpec] = DEFAULT_SPECS
+    specs: Dict[str, SymbolSpec] = field(default_factory=lambda: DEFAULT_SPECS.copy())
     risk_frac: float = 0.01           # 1% per trade
+
 
 def _tz_df(df: pd.DataFrame, tz: str) -> pd.DataFrame:
     if not isinstance(df.index, pd.DatetimeIndex):

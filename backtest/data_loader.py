@@ -4,6 +4,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Optional
 
+
 def fetch_data(
     csv_path: Optional[str | Path] = None,
     symbol: Optional[str] = None,
@@ -18,6 +19,7 @@ def fetch_data(
     if csv_path:
         csv_path = Path(csv_path)
         df = pd.read_csv(csv_path)
+
         # tijdkolom detecteren
         for col in ("date", "datetime", "timestamp", "time"):
             if col in df.columns:
@@ -44,10 +46,19 @@ def fetch_data(
     df = df[["open", "high", "low", "close", "volume"]].astype(float)
     df = df[~df.index.duplicated(keep="last")]
 
-    # Filter op start/end als gegeven
+    # Zorg dat start/end dezelfde tijdzone krijgen als de index
+    tz = df.index.tz
+
     if start:
-        df = df.loc[pd.Timestamp(start):]
+        ts = pd.Timestamp(start)
+        if tz is not None and ts.tzinfo is None:
+            ts = ts.tz_localize(tz)  # align naar index-tz
+        df = df.loc[ts:]
+
     if end:
-        df = df.loc[:pd.Timestamp(end)]
+        ts = pd.Timestamp(end)
+        if tz is not None and ts.tzinfo is None:
+            ts = ts.tz_localize(tz)
+        df = df.loc[:ts]
 
     return df

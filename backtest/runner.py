@@ -1,92 +1,53 @@
-from __future__ import annotations
-import pandas as pd
-from typing import Optional
-
 from backtest.data_loader import fetch_data
-from strategies.order_block import order_block_signals
+from strategies.breakout_signals import generate_breakout_signals
+from strategies.order_block_signals import order_block_signals
 from utils.metrics import summarize_equity_metrics
 
 def run_backtest(
-    *,
-    strategy_name: str = "order_block_simple",
-    params: Optional[dict] = None,
+    strategy_name: str,
+    params: dict,
     symbol: str,
     timeframe: str,
     start: str,
     end: str,
-    csv: Optional[str] = None,
-    initial_cash: float = 10_000.0,
-    fee_bps: float = 0.0,
-    slippage_bps: float = 0.0,
+    csv,
 ):
-    """
-    Backtest runner die werkt met cli.main backtest.
-    Laadt zelf data via data_loader.fetch_data of CSV.
-    """
     df = fetch_data(csv_path=csv, symbol=symbol, timeframe=timeframe, start=start, end=end)
-    if df.empty or "close" not in df.columns:
-        raise ValueError("Kon geen geldige data laden, 'close' kolom ontbreekt")
 
-    # Strategie-signalen (verwijder ongebruikte params)
-    if strategy_name == "order_block_simple":
-        lookback = params.get("lookback_bos", 3) if params else 3
-        signals = order_block_signals(df, swing_w=lookback)
-    else:
-        raise ValueError(f"Onbekende strategie: {strategy_name}")
-
-    # --- Simpele backtest engine ---
-    price = df["close"].astype(float)
-    pos = signals["long"].astype(int).reindex(price.index).fillna(0)
-
-    ptc = (fee_bps + slippage_bps) / 10_000.0
-    cash = initial_cash
-    units = 0.0
-    trades = []
-    equity = []
-
-    delta = pos.diff().fillna(pos.iloc[0])
-    entries = price.index[(delta == 1)]
-    exits = price.index[(delta == -1)]
-
-    if pos.iloc[0] == 1 and (len(entries) == 0 or entries[0] != price.index[0]):
-        entries = entries.insert(0, price.index[0])
-    if pos.iloc[-1] == 1 and (len(exits) == 0 or exits[-1] != price.index[-1]):
-        exits = exits.append(pd.Index([price.index[-1]]))
-
-    for ent, ex in zip(entries, exits):
-        ent_px = price.loc[ent] * (1 + ptc)
-        if units == 0.0:
-            units = cash / ent_px
-            cash -= units * ent_px
-            trades.append({"entry_time": ent, "entry_px": float(ent_px)})
-
-        for ts in price.loc[ent:ex].index:
-            equity.append((ts, float(cash + units * price.loc[ts])))
-
-        ex_px = price.loc[ex] * (1 - ptc)
-        cash += units * ex_px
-        pnl = cash - initial_cash  # Vereenvoudigd; pas aan voor breakout-style pnl_cash
-        trades[-1].update(
-            {"exit_time": ex, "exit_px": float(ex_px), "pnl_cash": float(pnl)}
+    # ===== Select Strategy =====
+    if strategy_name == "breakout":
+        signals = generate_breakout_signals(
+            df,
+            session_start=7,
+            session_end=8,
+            cancel_at=17,
+            mode="close_confirm",
+            confirm=2,
+            min_range=10,
+            vol_pctl=40,
+            vol_lookback=60,
+            atr_period=14,
+            atr_sl=1.0,
+            atr_tp=1.8,
+            risk_pct=0.01,
+            fee_bps=2,
+            vpp=1.0,
         )
-        units = 0.0
+        # Je breakout-signals-functie geeft meestal een list[dict] met trades.
+        # Convert eventueel naar DataFrame met entries/exits.
+        trades = signals  # of pd.DataFrame(signals)
+        # Genereer equity curve & metrics
+        equity = ...  # vul in zoals bij breakout_exec.py
+        metrics = summarize_equity_metrics(equity["equity"])
+        return equity, trades, metrics
 
-    if not equity:
-        for ts in price.index:
-            equity.append((ts, float(cash)))
+    elif strategy_name == "order_block":
+        entries, exits = order_block_signals(df, swing_w=params.get("lookback_bos", 20))
+        # Gebruik je eigen runner logic, bijv. vbt of native sim
+        trades = ...  # logica voor order block trades
+        equity = ...  # equity curve genereren
+        metrics = summarize_equity_metrics(equity["equity"])
+        return equity, trades, metrics
+
     else:
-        seen = set(ts for ts, _ in equity)
-        for ts in price.index:
-            if ts not in seen:
-                equity.append((ts, float(cash)))
-
-    df_eq = (
-        pd.DataFrame(equity, columns=["time", "equity"])
-        .drop_duplicates("time")
-        .set_index("time")
-        .sort_index()
-    )
-    trades_df = pd.DataFrame(trades)
-
-    metrics = summarize_equity_metrics(df_eq, trades_df)
-    return df_eq, trades_df, metrics
+        raise ValueError(f"Unknown strategy {strategy_name}")
