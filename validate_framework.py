@@ -305,4 +305,4 @@ if __name__ == "__main__":
     # Run validation
     is_valid = validator.validate_all()
 
-    sys.exit(0 if is_valid else 1)y
+    sys.exit(0 if is_valid else 1)
