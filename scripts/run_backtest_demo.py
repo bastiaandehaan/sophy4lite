@@ -1,10 +1,8 @@
 # scripts/run_backtest_demo.py
 from __future__ import annotations
-
 import os
 from pathlib import Path
 from typing import Optional
-
 import pandas as pd
 
 from config import logger
@@ -21,15 +19,15 @@ def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window
         raise TypeError("Data index must be DatetimeIndex")
     df = df.sort_index()
 
-    # 2) Data-health + dag-samenvatting (alleen loggen)
+    # 2) Health + dag-samenvatting (alleen loggen)
     logger.info(health_line(df, expected_freq="15T"))
     days, min_bars, mean_bars = summarize_day_health(df)
     logger.info(f"DAYS {{'count': {days}, 'min_bars': {min_bars}, 'mean_bars': {mean_bars:.1f}}}")
 
-    # 3) Eenvoudig signaal (gap-safe, bar-based)
+    # 3) Simpel breakout-signaal (gap-safe, bar-based)
     sig = breakout_long(df["close"], df["high"], window=window)
 
-    # 4) Naïeve equity (1x notional; geen fees/slippage/SL/TP)
+    # 4) Naïeve equity (1x notional; geen fees/slippage)
     pos = sig.astype(int)
     rets = df["close"].pct_change().fillna(0.0)
     eq = (1.0 + rets * pos).cumprod().rename("Equity")
@@ -40,11 +38,11 @@ def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window
         save_equity_and_dd(eq, outdir)
         logger.info(f"Viz saved to {outdir}")
 
-    # 6) Korte run-samenvatting
+    # 6) Samenvatting
     n_entries = int((pos & ~pos.shift(1).fillna(False)).sum())
     logger.info(f"ENTRIES {n_entries} | FINAL_EQ {eq.iloc[-1]:.4f} | BARS {len(df)}")
 
-    # 7) Bewaar equity (klein, handig om snel te openen)
+    # 7) Equity bewaren
     outdir.mkdir(parents=True, exist_ok=True)
     eq.to_csv(outdir / "equity.csv", index=True)
     return outdir

@@ -2,22 +2,23 @@
 Sophy4Lite strategies package.
 
 Exports:
-- Breakout (ATR-based R:R, sessie-range, FTMO-guards via backtester)
-- Shared types/helpers for strategie-implementaties
+- Breakout signals (long/short)
+- Breakout parameters & helpers (ATR, levels, specs)
 """
 
-from .breakout_signals import (
+from .breakout_signals import breakout_long, breakout_short
+from .breakout_params import (
     BreakoutParams,
     SymbolSpec,
     DEFAULT_SPECS,
     daily_levels,
-    confirm_pass,
 )
 
 __all__ = [
+    "breakout_long",
+    "breakout_short",
     "BreakoutParams",
     "SymbolSpec",
     "DEFAULT_SPECS",
     "daily_levels",
-    "confirm_pass",
 ]
