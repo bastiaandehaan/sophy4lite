@@ -10,7 +10,7 @@ from backtest.data_loader import fetch_data
 from strategies.breakout_signals import breakout_long
 from utils.data_health import health_line
 from utils.days import summarize_day_health
-from utils.plot import save_equity_and_dd  # let op: module heet 'plot', niet 'plots'
+from utils.plot import save_equity_and_dd  # module heet 'plot'
 
 def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window: int = 20) -> Path:
     # 1) Data laden
@@ -20,16 +20,16 @@ def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window
     df = df.sort_index()
 
     # 2) Health + dag-samenvatting (alleen loggen)
-    logger.info(health_line(df, expected_freq="15T"))
+    logger.info(health_line(df, expected_freq="15min"))
     days, min_bars, mean_bars = summarize_day_health(df)
     logger.info(f"DAYS {{'count': {days}, 'min_bars': {min_bars}, 'mean_bars': {mean_bars:.1f}}}")
 
-    # 3) Simpel breakout-signaal (gap-safe, bar-based)
+    # 3) Simpel breakout-signaal (gap-safe, bar-based)  -> boolean Series
     sig = breakout_long(df["close"], df["high"], window=window)
 
     # 4) Naïeve equity (1x notional; geen fees/slippage)
-    pos = sig.astype(int)
-    rets = df["close"].pct_change().fillna(0.0)
+    pos = sig.astype(int)                             # 0/1
+    rets = df["close"].pct_change().fillna(0.0)       # float
     eq = (1.0 + rets * pos).cumprod().rename("Equity")
 
     # 5) Optionele visuals via env var SOPHY_VIZ=1
@@ -38,8 +38,9 @@ def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window
         save_equity_and_dd(eq, outdir)
         logger.info(f"Viz saved to {outdir}")
 
-    # 6) Samenvatting
-    n_entries = int((pos & ~pos.shift(1).fillna(False)).sum())
+    # 6) Samenvatting — ENTRIES op basis van boolean 'sig' (geen ~ op float)
+    entries = sig & (~sig.shift(1).fillna(False))
+    n_entries = int(entries.sum())
     logger.info(f"ENTRIES {n_entries} | FINAL_EQ {eq.iloc[-1]:.4f} | BARS {len(df)}")
 
     # 7) Equity bewaren
