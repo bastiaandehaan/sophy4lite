@@ -19,7 +19,7 @@ class ORBExecCfg:
     specs: Dict[str, SymbolSpec] = None
     risk_frac: float = 0.01
     atr_n: int = 14
-    atr_floor: float = 1eâ€‘6
+    atr_floor: float = 1e-6
 
     def get_spec(self, symbol: str) -> SymbolSpec:
         specs = self.specs or DEFAULT_SPECS
@@ -45,7 +45,7 @@ def backtest_orb_bidirectional(
     entries_short: pd.Series,
 ) -> Tuple[pd.Series, pd.DataFrame, dict]:
     """
-    Backtest preâ€‘market ORB met long Ã©n short entries.
+    Backtest pre-market ORB met long Ã©n short entries.
     Er wordt max 1 trade per dag gezet (eerste trigger wint).
     Intraâ€‘bar SLâ€‘prioriteit, ATRâ€‘based SL/TP, fees en slippage zoals in breakout_exec.
     """
