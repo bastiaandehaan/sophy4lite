@@ -1,3 +1,8 @@
+
+---
+
+## ✅ `.gitignore`
+```gitignore
 # -------------------------
 # Python build artefacts
 # -------------------------
@@ -12,13 +17,17 @@ __pycache__/
 build/
 dist/
 
+# -------------------------
 # Virtual environments
+# -------------------------
 .venv/
 venv/
 .env
 .envrc
 
+# -------------------------
 # Logs & debug
+# -------------------------
 *.log
 
 # -------------------------
@@ -47,7 +56,6 @@ reports/
 *.png
 
 # If you want to keep example plots/CSVs, place them in docs/ or examples/
-# and whitelist them like:
 #!docs/*.png
 #!examples/*.csv
 
@@ -60,6 +68,11 @@ profiles/*.old
 profiles/*.tmp
 # Important: keep this file tracked
 !profiles/live.yaml
+
+# -------------------------
+# Type checkers / caches
+# -------------------------
+.mypy_cache/
 
 # -------------------------
 # OS junk
