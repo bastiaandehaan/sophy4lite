@@ -25,11 +25,11 @@ def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window
     logger.info(f"DAYS {{'count': {days}, 'min_bars': {min_bars}, 'mean_bars': {mean_bars:.1f}}}")
 
     # 3) Simpel breakout-signaal (gap-safe, bar-based)  -> boolean Series
-    sig = breakout_long(df["close"], df["high"], window=window)
+    sig = breakout_long(df["close"], df["high"], window=window).astype("boolean")
 
     # 4) Naïeve equity (1x notional; geen fees/slippage)
-    pos = sig.astype(int)                             # 0/1
-    rets = df["close"].pct_change().fillna(0.0)       # float
+    pos = sig.fillna(False).astype(int)                 # 0/1
+    rets = df["close"].pct_change().fillna(0.0)         # float
     eq = (1.0 + rets * pos).cumprod().rename("Equity")
 
     # 5) Optionele visuals via env var SOPHY_VIZ=1
@@ -38,8 +38,9 @@ def run(csv: str, start: Optional[str] = None, end: Optional[str] = None, window
         save_equity_and_dd(eq, outdir)
         logger.info(f"Viz saved to {outdir}")
 
-    # 6) Samenvatting — ENTRIES op basis van boolean 'sig' (geen ~ op float)
-    entries = sig & (~sig.shift(1).fillna(False))
+    # 6) Samenvatting — ENTRIES op basis van boolean 'sig' (zonder dtype-waarschuwing)
+    prev = sig.shift(1).fillna(False)                   # blijft boolean
+    entries = sig & (~prev)
     n_entries = int(entries.sum())
     logger.info(f"ENTRIES {n_entries} | FINAL_EQ {eq.iloc[-1]:.4f} | BARS {len(df)}")
 
