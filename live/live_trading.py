@@ -3,7 +3,9 @@ import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime
 from config import logger, RISK_PER_TRADE, MAX_DAILY_LOSS, MAX_TOTAL_LOSS, STOP_AFTER_LOSSES
-from risk.ftmo import fixed_percent_sizing
+# # from risk.ftmo import fixed_percent_sizing
+# TODO: Create risk/ftmo.py or remove this import
+# TODO: Create risk/ftmo.py or remove this import
 
 class DailyState:
     def __init__(self):
