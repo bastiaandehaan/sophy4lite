@@ -1,0 +1,81 @@
+
+---
+
+## ✅ `.gitignore`
+```gitignore
+# -------------------------
+# Python build artefacts
+# -------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# -------------------------
+# Virtual environments
+# -------------------------
+.venv/
+venv/
+.env
+.envrc
+
+# -------------------------
+# Logs & debug
+# -------------------------
+*.log
+
+# -------------------------
+# IDE / Editor
+# -------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# -------------------------
+# Jupyter notebooks
+# -------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -------------------------
+# Data / outputs
+# -------------------------
+# Local run outputs (ignore generated reports & artifacts)
+output/
+reports/
+
+# Ignore bulk data files
+*.csv
+*.png
+
+# If you want to keep example plots/CSVs, place them in docs/ or examples/
+#!docs/*.png
+#!examples/*.csv
+
+# -------------------------
+# Config / profiles
+# -------------------------
+# Keep live.yaml under version control, ignore backups or generated variants
+profiles/*.bak
+profiles/*.old
+profiles/*.tmp
+# Important: keep this file tracked
+!profiles/live.yaml
+
+# -------------------------
+# Type checkers / caches
+# -------------------------
+.mypy_cache/
+
+# -------------------------
+# OS junk
+# -------------------------
+.DS_Store
+Thumbs.db
