@@ -1,9 +1,12 @@
+from typing import Dict, Any, Tuple
+
 import pandas as pd
 import vectorbt as vbt
-from typing import Dict, Any, Tuple
+
 from backtest.data_loader import fetch_data
 from strategies.order_block import order_block_signals
 from utils.metrics import summarize_equity_metrics
+
 
 def run_backtest_vbt(
     strategy_name: str,

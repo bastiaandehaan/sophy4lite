@@ -1,8 +1,11 @@
 # utils/plot.py
 from __future__ import annotations
+
 from pathlib import Path
-import pandas as pd
+
 import matplotlib.pyplot as plt
+import pandas as pd
+
 
 def save_equity_and_dd(equity: pd.Series, outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)

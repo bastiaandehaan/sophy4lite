@@ -5,9 +5,8 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-import pandas as pd
-from rich.table import Table
 from rich.console import Console
+from rich.table import Table
 
 try:
     from config import logger  # type: ignore

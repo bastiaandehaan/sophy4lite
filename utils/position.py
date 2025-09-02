@@ -2,6 +2,7 @@
 Position sizing and trade utilities for Sophy4Lite.
 """
 from __future__ import annotations
+
 from enum import Enum
 from typing import NamedTuple
 

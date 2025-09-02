@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import MetaTrader5 as mt5
 import pandas as pd
-from pathlib import Path
 import typer
+
 
 def export(
     symbol: str = typer.Option(..., help="Instrument, bv. GER40.cash of XAUUSD"),

@@ -5,11 +5,11 @@ Controleert het hele framework op fouten en biedt fixes.
 """
 
 import ast
-import sys
 import importlib.util
-from pathlib import Path
-from typing import List, Dict, Tuple
 import subprocess
+import sys
+from pathlib import Path
+from typing import List, Dict
 
 
 class FrameworkValidator:

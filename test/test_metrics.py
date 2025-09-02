@@ -1,6 +1,8 @@
 # test/test_metrics.py
 import pandas as pd
+
 from utils.metrics import summarize_equity_metrics
+
 
 def test_metrics_basic():
     idx = pd.date_range("2024-01-01", periods=10, freq="h")

@@ -1,7 +1,10 @@
 # utils/days.py
 from __future__ import annotations
-import pandas as pd
+
 from typing import Tuple
+
+import pandas as pd
+
 
 def day_counts(df: pd.DataFrame) -> pd.Series:
     """Aantal bars per kalenderdag die in de data voorkomen."""
