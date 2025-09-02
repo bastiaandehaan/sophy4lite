@@ -1,72 +1,34 @@
-"""
-Position sizing and trade utilities for Sophy4Lite.
-"""
+# utils/position.py
 from __future__ import annotations
 
-from enum import Enum
-from typing import NamedTuple
-
-
-class Side(Enum):
-    """Trade side enumeration."""
-    BUY = 1
-    SELL = -1
-
-
-def side_factor(side: Side) -> float:
-    """Return 1.0 for BUY, -1.0 for SELL."""
-    return float(side.value)
-
-
-def side_name(side: Side) -> str:
-    """Return 'BUY' or 'SELL' string."""
-    return side.name
-
-
-class Position(NamedTuple):
-    """Position information."""
-    symbol: str
-    side: Side
-    size: float
-    entry_price: float
-    sl_price: float
-    tp_price: float
-
-    @property
-    def risk_points(self) -> float:
-        """Distance to stop loss in points."""
-        return abs(self.entry_price - self.sl_price)
-
-    @property
-    def reward_points(self) -> float:
-        """Distance to take profit in points."""
-        return abs(self.tp_price - self.entry_price)
-
-    @property
-    def risk_reward_ratio(self) -> float:
-        """R:R ratio of the position."""
-        if self.risk_points == 0:
-            return 0.0
-        return self.reward_points / self.risk_points
-
-
-def _size(equity: float, entry: float, stop: float, vpp: float,
-          risk_frac: float) -> float:
+def _size(
+    equity: float,
+    entry: float,
+    stop: float,
+    value_per_point: float,
+    risk_frac: float,
+    lot_step: float = 0.01,
+) -> float:
     """
-    Calculate position size based on fixed percentage risk.
+    Fixed-% risk position sizing with broker lot rounding.
 
-    Args:
-        equity: Current account equity
-        entry: Entry price
-        stop: Stop loss price
-        vpp: Value per point
-        risk_frac: Risk fraction (e.g., 0.01 for 1%)
-
-    Returns:
-        Position size in lots/contracts
+    equity          : current equity (cash)
+    entry, stop     : entry and stop price
+    value_per_point : PnL per 1.0 price point per 1.00 lot
+    risk_frac       : risk as fraction of equity (e.g., 0.01 for 1%)
+    lot_step        : broker lot step (rounding down)
     """
-    risk_cash = equity * risk_frac
-    pts = abs(entry - stop)
-    if pts <= 0 or vpp <= 0:
+    if equity <= 0 or value_per_point <= 0 or risk_frac <= 0:
         return 0.0
-    return float(risk_cash / (pts * vpp))
+    pts = abs(entry - stop)
+    if pts <= 0:
+        return 0.0
+
+    risk_cash = equity * risk_frac
+    raw = risk_cash / (pts * value_per_point)
+
+    if lot_step > 0:
+        # round down to nearest lot_step to avoid order rejections
+        rounded = (raw // lot_step) * lot_step
+        return float(max(0.0, rounded))
+    return float(max(0.0, raw))

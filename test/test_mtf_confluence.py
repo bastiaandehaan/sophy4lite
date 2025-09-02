@@ -3,13 +3,12 @@
 Complete test suite voor MTF Confluence strategy
 Inclusief smoke test met synthetische data en look-ahead bias detection
 """
-import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+import pandas as pd
 import pytest
 
-from strategies.mtf_confluence import MTFSignals, MTFParams
 from backtest.mtf_exec import backtest_mtf_confluence, MTFExecCfg
+from strategies.mtf_confluence import MTFSignals, MTFParams
 
 
 def make_synth_m1(n_days=5, tz="Europe/Berlin", trend=0.0002, volatility=1.5):
