@@ -1,307 +1,785 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DAX TraderTom ORB — optimized SL/TP parameter sweep with progress/ETA
-- Pre-market: 08:00-09:00 (server-time)
-- Session:     09:00-18:30 (server-time)
-- Entry:       first break of pre-market high/low
-- Exit:        TP/SL only (no time-exit), trades can span days
-- Max 1 trade per day
+DAX ORB Realistic - MT5 data fetch + realistic spread/slippage simulation
+CRITICAL: This version includes transaction costs for realistic results
 """
 from __future__ import annotations
 import argparse, glob, math, time, multiprocessing as mp
 from pathlib import Path
+from datetime import datetime, timedelta
 import pandas as pd
-from zoneinfo import ZoneInfo
 import numpy as np
+from zoneinfo import ZoneInfo
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import warnings
 
-# ------------------------------- CLI -----------------------------------------
+warnings.filterwarnings('ignore')
+
+# Optional MT5 integration
+try:
+    import MetaTrader5 as mt5
+
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
+    print("⚠️ MetaTrader5 package not installed. Install with: pip install MetaTrader5")
+    print("   Continuing with CSV file support only.\n")
+
+
+# ============================= REALISTIC COSTS =====================================
+class TradingCosts:
+    """
+    Realistic trading costs for DAX CFD/Futures
+    Based on typical retail broker conditions
+    """
+    # Spread (bid-ask) - varies by time of day
+    SPREAD_OPENING = 2.0  # Points during first 30 min (high volatility)
+    SPREAD_NORMAL = 1.0  # Points during normal hours
+    SPREAD_CLOSING = 1.5  # Points during last hour
+
+    # Slippage on stop orders (worse during volatility)
+    SLIPPAGE_STOP_OPENING = 1.5  # Extra points on stops during opening
+    SLIPPAGE_STOP_NORMAL = 0.5  # Normal slippage on stops
+
+    # Commission per side (points equivalent)
+    COMMISSION = 0.5  # Per trade side (entry + exit = 1.0 total)
+
+    @staticmethod
+    def get_entry_cost(hour: int, minute: int, is_opening_window: bool) -> float:
+        """Get realistic entry cost based on time of day"""
+        total_minutes = hour * 60 + minute
+
+        # Opening window (09:00-09:30) - highest costs
+        if is_opening_window and 540 <= total_minutes <= 570:
+            return TradingCosts.SPREAD_OPENING + TradingCosts.COMMISSION
+        # Closing hour (17:30-18:30) - elevated costs
+        elif 1050 <= total_minutes <= 1110:
+            return TradingCosts.SPREAD_CLOSING + TradingCosts.COMMISSION
+        # Normal hours
+        else:
+            return TradingCosts.SPREAD_NORMAL + TradingCosts.COMMISSION
+
+    @staticmethod
+    def get_stop_slippage(hour: int, minute: int) -> float:
+        """Get realistic slippage for stop orders"""
+        total_minutes = hour * 60 + minute
+
+        # Opening 30 minutes - high slippage
+        if 540 <= total_minutes <= 570:
+            return TradingCosts.SLIPPAGE_STOP_OPENING
+        else:
+            return TradingCosts.SLIPPAGE_STOP_NORMAL
+
+
+# ============================= MT5 Integration ======================================
+def fetch_mt5_data(symbol: str = "DE40", days_back: int = 60, server: str = None,
+                   login: int = None, password: str = None) -> pd.DataFrame:
+    """
+    Fetch M1 data directly from MT5
+
+    Args:
+        symbol: Symbol to fetch (DE40, GER40, etc.)
+        days_back: Number of days of history
+        server: MT5 server (optional, uses current if None)
+        login: MT5 account (optional)
+        password: MT5 password (optional)
+    """
+    if not MT5_AVAILABLE:
+        raise ImportError("MetaTrader5 package not installed")
+
+    # Initialize MT5
+    if login and password and server:
+        if not mt5.initialize(login=login, password=password, server=server):
+            raise ConnectionError(f"MT5 init failed: {mt5.last_error()}")
+    else:
+        if not mt5.initialize():
+            raise ConnectionError(f"MT5 init failed: {mt5.last_error()}")
+
+    # Check symbol exists
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        mt5.shutdown()
+        raise ValueError(
+            f"Symbol {symbol} not found. Available symbols: {[s.name for s in mt5.symbols_get()][:10]}...")
+
+    # Calculate date range
+    utc_to = datetime.now()
+    utc_from = utc_to - timedelta(days=days_back)
+
+    # Fetch M1 bars
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, utc_from, utc_to)
+
+    if rates is None or len(rates) == 0:
+        mt5.shutdown()
+        raise ValueError(f"No data received for {symbol}")
+
+    # Convert to DataFrame
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s', utc=True)
+    df = df[['time', 'open', 'high', 'low', 'close', 'tick_volume']].rename(
+        columns={'tick_volume': 'volume'})
+
+    mt5.shutdown()
+
+    print(f"✓ Fetched {len(df):,} M1 bars from MT5 for {symbol}")
+    print(f"  Period: {df['time'].min()} to {df['time'].max()}")
+
+    return df
+
+
+# ============================= CLI ==================================================
 def parse_args():
-    p = argparse.ArgumentParser(description="DAX TraderTom ORB - Optimized SL/TP sweep + ETA")
-    p.add_argument("paths", nargs="*", default=None, help="Path or glob to MT5 CSV files (time,open,high,low,close,volume). If none, searches current and 'data' directory.")
-    p.add_argument("--tz", default="Europe/Athens", help="Server timezone, e.g., Europe/Athens")
-    p.add_argument("--pre", default="08:00-09:00", help="Pre-market window (HH:MM-HH:MM)")
-    p.add_argument("--sess", default="09:00-18:30", help="Session window (HH:MM-HH:MM)")
-    p.add_argument("--confirm", choices=["touch", "close"], default="touch", help="Entry: wick ('touch') or close ('close')")
-    p.add_argument("--samebar", choices=["skip", "worst", "best"], default="worst",
-                   help="If both sides break in same bar: skip/worst/best")
-    p.add_argument("--date-from", default=None, help="Filter from (YYYY-MM-DD) in server-tz")
-    p.add_argument("--date-to", default=None, help="Filter to (YYYY-MM-DD) in server-tz")
-    p.add_argument("--sl-min", type=float, default=2.0)
+    p = argparse.ArgumentParser(description="DAX ORB Realistic - MT5 + True Costs")
+
+    # Data source
+    p.add_argument("paths", nargs="*", default=None,
+                   help="CSV files (if none, tries MT5 or searches for CSVs)")
+    p.add_argument("--mt5", action="store_true", help="Fetch data from MT5")
+    p.add_argument("--symbol", default="DE40", help="MT5 symbol (DE40, GER40, etc.)")
+    p.add_argument("--days", type=int, default=60,
+                   help="Days of history to fetch from MT5")
+
+    # Trading parameters
+    p.add_argument("--tz", default="Europe/Athens", help="Server timezone")
+    p.add_argument("--pre", default="08:00-09:00", help="Pre-market window")
+    p.add_argument("--sess", default="09:00-18:30", help="Session window")
+
+    # Strategy modes
+    p.add_argument("--tradertom", action="store_true",
+                   help="TraderTom fixed params (SL=9, TP=6)")
+    p.add_argument("--realistic", action="store_true", default=True,
+                   help="Apply realistic costs (default: ON)")
+    p.add_argument("--no-costs", dest="realistic", action="store_false",
+                   help="Disable transaction costs")
+    p.add_argument("--opening-window", type=int, default=30,
+                   help="Minutes after open for entry")
+
+    # Parameter sweep (if not --tradertom)
+    p.add_argument("--sl-min", type=float, default=5.0)
     p.add_argument("--sl-max", type=float, default=15.0)
     p.add_argument("--sl-step", type=float, default=1.0)
-    p.add_argument("--tp-min", type=float, default=2.0)
-    p.add_argument("--tp-max", type=float, default=15.0)
+    p.add_argument("--tp-min", type=float, default=3.0)
+    p.add_argument("--tp-max", type=float, default=12.0)
     p.add_argument("--tp-step", type=float, default=1.0)
-    p.add_argument("--min-trades", type=int, default=120, help="Min. #trades for ranking")
-    p.add_argument("--out", default="dax_orb_grid_results.csv", help="Output CSV with all combinations")
-    p.add_argument("--save-best-trades", action="store_true", help="Save trades of best combo")
-    p.add_argument("--best-trades-out", default="dax_orb_best_trades.csv", help="Best-trades CSV path")
-    p.add_argument("--progress-sec", type=float, default=5.0, help="Progress/ETA update interval in seconds")
+
+    # Analysis
+    p.add_argument("--min-trades", type=int, default=30, help="Min trades for validity")
+    p.add_argument("--train-pct", type=float, default=0.7,
+                   help="Training set percentage (0.7 = 70%)")
+
+    # Output
+    p.add_argument("--plot", action="store_true", help="Generate plots")
+    p.add_argument("--save-trades", action="store_true", help="Save trade list")
+    p.add_argument("--verbose", action="store_true", help="Detailed output")
+
     return p.parse_args()
 
-# ------------------------------ Helpers --------------------------------------
-def read_merge_csv(paths: list[str] | None) -> pd.DataFrame:
-    if not paths:
+
+# ============================= Data Loading =========================================
+def load_data(args) -> pd.DataFrame:
+    """Load data from MT5 or CSV files"""
+
+    # Try MT5 first if requested
+    if args.mt5:
+        if not MT5_AVAILABLE:
+            print("❌ MT5 requested but MetaTrader5 package not installed")
+            print("   Install with: pip install MetaTrader5")
+            print("   Falling back to CSV files...")
+        else:
+            try:
+                return fetch_mt5_data(args.symbol, args.days)
+            except Exception as e:
+                print(f"❌ MT5 fetch failed: {e}")
+                print("   Falling back to CSV files...")
+
+    # Load from CSV files
+    if not args.paths:
+        # Search for CSV files
         current_dir = Path.cwd()
         data_dir = current_dir / "data"
-        paths = [str(current_dir / "*.csv"), str(data_dir / "*.csv")]
-    files = [f for pat in paths for f in glob.glob(pat)]
+        patterns = ["*.csv", "*_M1.csv", "GER*.csv", "DAX*.csv", "DE40*.csv",
+            "data/*.csv", "data/*_M1.csv"]
+        files = []
+        for pattern in patterns:
+            files.extend(glob.glob(str(current_dir / pattern)))
+            if data_dir.exists():
+                files.extend(glob.glob(str(data_dir / pattern)))
+        files = list(set(files))  # Remove duplicates
+    else:
+        files = [f for pat in args.paths for f in glob.glob(pat)]
+
     if not files:
-        raise FileNotFoundError("No CSV files found. Provide paths or place CSV files in current or 'data' directory.")
+        raise FileNotFoundError("No data source available!\n"
+                                "Options:\n"
+                                "1. Use --mt5 to fetch from MetaTrader5\n"
+                                "2. Place CSV files in current directory\n"
+                                "3. Specify CSV path as argument")
+
+    # Read and merge CSV files
     dfs = []
     for fp in files:
-        df = pd.read_csv(fp).rename(columns={c: c.lower() for c in pd.read_csv(fp).columns})
-        if not all(c in df.columns for c in ["time", "open", "high", "low", "close"]):
-            raise ValueError(f"Missing required column in {fp}")
-        dfs.append(df)
-    big = pd.concat(dfs, ignore_index=True)[["time", "open", "high", "low", "close"]]
-    big["time"] = pd.to_datetime(big["time"], utc=True, errors="coerce")
-    return big.dropna(subset=["time"]).drop_duplicates(subset=["time"]).sort_values("time")
+        df = pd.read_csv(fp)
+        # Standardize column names
+        df.columns = df.columns.str.lower()
+        if 'time' not in df.columns and 'date' in df.columns:
+            df['time'] = df['date']
+        required = ['time', 'open', 'high', 'low', 'close']
+        if not all(c in df.columns for c in required):
+            print(f"⚠️ Skipping {fp}: missing required columns")
+            continue
+        dfs.append(df[required + (['volume'] if 'volume' in df.columns else [])])
 
-def hhmm_to_minutes(hhmm: str) -> int:
-    h, m = hhmm.split(":")
-    return int(h) * 60 + int(m)
+    if not dfs:
+        raise ValueError("No valid CSV files found")
 
-def build_orb_levels(df_local: pd.DataFrame, pre_start: int, pre_end: int) -> dict:
-    orb = df_local.groupby(df_local.index.date).apply(
-        lambda g: (float(g[(g["minute"] >= pre_start) & (g["minute"] <= pre_end)]["low"].min()),
-                   float(g[(g["minute"] >= pre_start) & (g["minute"] <= pre_end)]["high"].max()))
-    ).dropna()
-    return orb.to_dict()
+    # Combine all data
+    df = pd.concat(dfs, ignore_index=True)
+    df['time'] = pd.to_datetime(df['time'], utc=True, errors='coerce')
+    df = df.dropna(subset=['time']).drop_duplicates(subset=['time']).sort_values('time')
 
-def fmt_secs(x: float) -> str:
-    x = max(0, int(x))
-    h, s = divmod(x, 3600)
-    m, s = divmod(s, 60)
-    return f"{h}u{m:02d}m{s:02d}s" if h else f"{m:02d}m{s:02d}s"
+    print(f"✓ Loaded {len(df):,} M1 bars from {len(files)} file(s)")
+    print(f"  Period: {df['time'].min()} to {df['time'].max()}")
 
-# ---------------------------- Optimized Backtest -----------------------------
-def run_backtest(df: pd.DataFrame, tz: str, pre_s: str, sess_s: str,
-                 sl: float, tp: float, confirm: str, samebar: str,
-                 date_from: str | None, date_to: str | None) -> tuple[pd.DataFrame, dict]:
+    return df
+
+
+# ============================= Realistic Backtest ===================================
+def run_realistic_backtest(df: pd.DataFrame, tz: str, pre_s: str, sess_s: str,
+                           sl: float, tp: float, use_costs: bool = True,
+                           tradertom_mode: bool = False, opening_window: int = 30,
+                           verbose: bool = False) -> tuple[pd.DataFrame, dict]:
+    """
+    Realistic backtest with proper costs and execution simulation
+
+    CRITICAL IMPROVEMENTS:
+    1. Spread costs on entry
+    2. Slippage on stop losses
+    3. Commission on both sides
+    4. No lookahead bias on pre-market levels
+    5. Proper position reset between tests
+    """
+
+    # Convert to local timezone
     df = df.copy()
-    df["local"] = df["time"].dt.tz_convert(ZoneInfo(tz))
-    df = df.set_index("local").sort_index()
-    if date_from:
-        df = df[df.index.date >= pd.to_datetime(date_from).date()]
-    if date_to:
-        df = df[df.index.date <= pd.to_datetime(date_to).date()]
-    if df.empty:
-        return pd.DataFrame(), dict(trades=0, wins=0, losses=0, pnl=0.0, pf=float("nan"), winrate=float("nan"))
+    df['local'] = df['time'].dt.tz_convert(ZoneInfo(tz))
+    df = df.set_index('local').sort_index()
 
-    # Filter on trading hours (08:00-22:00 GMT+2/3)
-    df = df[(df.index.hour >= 8) & (df.index.hour < 22)]
-    df["minute"] = df.index.hour * 60 + df.index.minute
-    pre_start, pre_end = [hhmm_to_minutes(x) for x in pre_s.split("-")]
-    sess_start, sess_end = [hhmm_to_minutes(x) for x in sess_s.split("-")]
+    # Add time components for cost calculation
+    df['hour'] = df.index.hour
+    df['minute_of_day'] = df.index.hour * 60 + df.index.minute
 
-    orb_levels = build_orb_levels(df, pre_start, pre_end)
+    # Parse time windows
+    pre_start, pre_end = [int(h) * 60 + int(m) for h, m in
+                          [t.split(':') for t in pre_s.split('-')]]
+    sess_start, sess_end = [int(h) * 60 + int(m) for h, m in
+                            [t.split(':') for t in sess_s.split('-')]]
+
+    # Build pre-market levels (with proper timing)
+    orb_levels = {}
+    for day, day_data in df.groupby(df.index.date):
+        # Only use data up to pre-market end (no lookahead)
+        pre_data = day_data[(day_data['minute_of_day'] >= pre_start) & (
+                    day_data['minute_of_day'] < pre_end)]
+        if not pre_data.empty:
+            orb_levels[day] = {'low': float(pre_data['low'].min()),
+                'high': float(pre_data['high'].max()),
+                'pre_close': float(pre_data['close'].iloc[-1])  # Where pre-market ended
+            }
 
     trades = []
-    in_pos = False
-    for day, group in df.groupby(df.index.date):
-        if day not in orb_levels or (in_pos and day == last_trade_day):
-            continue
-        orb_lo, orb_hi = orb_levels[day]
-        if not (math.isfinite(orb_hi) and math.isfinite(orb_lo) and orb_hi > orb_lo):
+    position = None  # Proper position tracking
+
+    for day, day_data in df.groupby(df.index.date):
+        # Skip if no pre-market data or already in position from previous day
+        if day not in orb_levels or position is not None:
             continue
 
-        # Vectorized breakout detection
-        mask_long_touch = (group["high"] >= orb_hi) & (group["low"] < orb_hi)
-        mask_short_touch = (group["low"] <= orb_lo) & (group["high"] > orb_lo)
-        mask_long_close = (group["close"] > orb_hi)
-        mask_short_close = (group["close"] < orb_lo)
-        trigger_long = mask_long_touch if confirm == "touch" else mask_long_close
-        trigger_short = mask_short_touch if confirm == "touch" else mask_short_close
-
-        if trigger_long.any() and not trigger_short.any():
-            pos_side = "long"
-            entry_idx = group[trigger_long].index[0]
-            entry = orb_hi
-        elif trigger_short.any() and not trigger_long.any():
-            pos_side = "short"
-            entry_idx = group[trigger_short].index[0]
-            entry = orb_lo
-        elif trigger_long.any() and trigger_short.any():
-            if samebar == "skip":
-                continue
-            elif samebar == "worst":
-                pos_side = "long" if sl > tp else "short"
-                entry = orb_hi if pos_side == "long" else orb_lo
-                pnl = -sl if pos_side == "long" else -tp
-                trades.append({"day": str(day), "entry_time": entry_idx, "exit_time": entry_idx,
-                               "side": pos_side, "entry": entry, "exit": entry - sl if pos_side == "long" else entry + sl,
-                               "reason": "SL", "pnl": pnl})
-                continue
-            elif samebar == "best":
-                pos_side = "long" if tp > sl else "short"
-                entry = orb_hi if pos_side == "long" else orb_lo
-                pnl = tp if pos_side == "long" else tp
-                trades.append({"day": str(day), "entry_time": entry_idx, "exit_time": entry_idx,
-                               "side": pos_side, "entry": entry, "exit": entry + tp if pos_side == "long" else entry - tp,
-                               "reason": "TP", "pnl": pnl})
-                continue
+        orb = orb_levels[day]
+        if not (math.isfinite(orb['high']) and math.isfinite(orb['low']) and orb[
+            'high'] > orb['low']):
             continue
+
+        # Determine entry window
+        if tradertom_mode:
+            entry_end = sess_start + opening_window
         else:
+            entry_end = sess_end
+
+        entry_window = day_data[(day_data['minute_of_day'] >= sess_start) & (
+                    day_data['minute_of_day'] <= entry_end)]
+
+        if entry_window.empty:
             continue
 
-        if pos_side:
-            stop = entry - sl if pos_side == "long" else entry + sl
-            target = entry + tp if pos_side == "long" else entry - tp
-            entry_time = entry_idx
-            in_pos = True
-            last_trade_day = day
+        # Check for breakout (pending order simulation)
+        for idx, bar in entry_window.iterrows():
+            if position is not None:  # Already entered
+                break
 
-            # Vectorized exit detection
-            if pos_side == "long":
-                hit_sl = (group.loc[entry_idx:]["low"] <= stop).any()
-                hit_tp = (group.loc[entry_idx:]["high"] >= target).any()
-                if hit_sl and hit_tp:
-                    exit_idx = group.loc[entry_idx:][(group.loc[entry_idx:]["low"] <= stop) | (group.loc[entry_idx:]["high"] >= target)].index[0]
-                    exit_px = stop if group.loc[exit_idx]["low"] <= stop else target
-                    reason = "SL" if exit_px == stop else "TP"
-                    pnl = -sl if reason == "SL" else tp
-                elif hit_sl:
-                    exit_idx = group.loc[entry_idx:][group.loc[entry_idx:]["low"] <= stop].index[0]
-                    exit_px = stop
-                    reason = "SL"
-                    pnl = -sl
-                elif hit_tp:
-                    exit_idx = group.loc[entry_idx:][group.loc[entry_idx:]["high"] >= target].index[0]
-                    exit_px = target
-                    reason = "TP"
-                    pnl = tp
-                else:
-                    continue
+            # Calculate costs for this specific time
+            if use_costs:
+                entry_cost = TradingCosts.get_entry_cost(bar['hour'],
+                    bar['minute_of_day'] % 60, tradertom_mode)
             else:
-                hit_sl = (group.loc[entry_idx:]["high"] >= stop).any()
-                hit_tp = (group.loc[entry_idx:]["low"] <= target).any()
-                if hit_sl and hit_tp:
-                    exit_idx = group.loc[entry_idx:][(group.loc[entry_idx:]["high"] >= stop) | (group.loc[entry_idx:]["low"] <= target)].index[0]
-                    exit_px = stop if group.loc[exit_idx]["high"] >= stop else target
-                    reason = "SL" if exit_px == stop else "TP"
-                    pnl = -sl if reason == "SL" else tp
-                elif hit_sl:
-                    exit_idx = group.loc[entry_idx:][group.loc[entry_idx:]["high"] >= stop].index[0]
-                    exit_px = stop
-                    reason = "SL"
-                    pnl = -sl
-                elif hit_tp:
-                    exit_idx = group.loc[entry_idx:][group.loc[entry_idx:]["low"] <= target].index[0]
-                    exit_px = target
-                    reason = "TP"
-                    pnl = tp
-                else:
-                    continue
+                entry_cost = 0
 
-            trades.append({"day": str(day), "entry_time": entry_time, "exit_time": exit_idx,
-                           "side": pos_side, "entry": entry, "exit": exit_px, "reason": reason, "pnl": pnl})
-            in_pos = False
+            # Buy stop order simulation (triggers if high touches level)
+            if bar['high'] >= orb['high']:
+                position = {'side': 'long', 'entry_time': idx, 'entry_raw': orb['high'],
+                    'entry': orb['high'] + entry_cost,  # Pay spread + commission
+                    'stop': orb['high'] - sl, 'target': orb['high'] + tp, 'day': day}
+                if verbose:
+                    print(
+                        f"LONG entry: {idx} @ {position['entry']:.1f} (raw: {position['entry_raw']:.1f}, cost: {entry_cost:.1f})")
+                break
 
+            # Sell stop order simulation
+            elif bar['low'] <= orb['low']:
+                position = {'side': 'short', 'entry_time': idx, 'entry_raw': orb['low'],
+                    'entry': orb['low'] - entry_cost,  # Pay spread + commission
+                    'stop': orb['low'] + sl, 'target': orb['low'] - tp, 'day': day}
+                if verbose:
+                    print(
+                        f"SHORT entry: {idx} @ {position['entry']:.1f} (raw: {position['entry_raw']:.1f}, cost: {entry_cost:.1f})")
+                break
+
+        # Check for exit if position was opened
+        if position is not None:
+            # Use all remaining data for exit (not limited to entry window)
+            exit_data = day_data.loc[position['entry_time']:]
+
+            for idx, bar in exit_data.iterrows():
+                exit_triggered = False
+
+                if position['side'] == 'long':
+                    # Check stop loss
+                    if bar['low'] <= position['stop']:
+                        if use_costs:
+                            slippage = TradingCosts.get_stop_slippage(bar['hour'], bar[
+                                'minute_of_day'] % 60)
+                            exit_price = position['stop'] - slippage
+                        else:
+                            exit_price = position['stop']
+
+                        pnl = exit_price - position['entry']
+                        trades.append({'day': str(position['day']),
+                            'entry_time': position['entry_time'], 'exit_time': idx,
+                            'side': position['side'], 'entry': position['entry_raw'],
+                            # Show raw entry in results
+                            'exit': exit_price, 'reason': 'SL', 'pnl': pnl,
+                            'costs': position['entry'] - position[
+                                'entry_raw'] + slippage if use_costs else 0})
+                        exit_triggered = True
+
+                    # Check take profit
+                    elif bar['high'] >= position['target']:
+                        if use_costs:
+                            exit_price = position['target'] - TradingCosts.COMMISSION
+                        else:
+                            exit_price = position['target']
+
+                        pnl = exit_price - position['entry']
+                        trades.append({'day': str(position['day']),
+                            'entry_time': position['entry_time'], 'exit_time': idx,
+                            'side': position['side'], 'entry': position['entry_raw'],
+                            'exit': exit_price, 'reason': 'TP', 'pnl': pnl,
+                            'costs': position['entry'] - position[
+                                'entry_raw'] + TradingCosts.COMMISSION if use_costs else 0})
+                        exit_triggered = True
+
+                else:  # Short position
+                    # Check stop loss
+                    if bar['high'] >= position['stop']:
+                        if use_costs:
+                            slippage = TradingCosts.get_stop_slippage(bar['hour'], bar[
+                                'minute_of_day'] % 60)
+                            exit_price = position['stop'] + slippage
+                        else:
+                            exit_price = position['stop']
+
+                        pnl = position['entry'] - exit_price
+                        trades.append({'day': str(position['day']),
+                            'entry_time': position['entry_time'], 'exit_time': idx,
+                            'side': position['side'], 'entry': position['entry_raw'],
+                            'exit': exit_price, 'reason': 'SL', 'pnl': pnl,
+                            'costs': position['entry_raw'] - position[
+                                'entry'] + slippage if use_costs else 0})
+                        exit_triggered = True
+
+                    # Check take profit
+                    elif bar['low'] <= position['target']:
+                        if use_costs:
+                            exit_price = position['target'] + TradingCosts.COMMISSION
+                        else:
+                            exit_price = position['target']
+
+                        pnl = position['entry'] - exit_price
+                        trades.append({'day': str(position['day']),
+                            'entry_time': position['entry_time'], 'exit_time': idx,
+                            'side': position['side'], 'entry': position['entry_raw'],
+                            'exit': exit_price, 'reason': 'TP', 'pnl': pnl,
+                            'costs': position['entry_raw'] - position[
+                                'entry'] + TradingCosts.COMMISSION if use_costs else 0})
+                        exit_triggered = True
+
+                if exit_triggered:
+                    position = None
+                    break
+
+    # Convert to DataFrame
     trades_df = pd.DataFrame(trades)
+
     if trades_df.empty:
-        return trades_df, dict(trades=0, wins=0, losses=0, pnl=0.0, pf=float("nan"), winrate=float("nan"),
-                               gross_profit=0.0, gross_loss=0.0, rr=(tp/sl if sl>0 else float("nan")))
+        return trades_df, {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0, 'winrate': 0,
+            'pf': 0, 'avg_winner': 0, 'avg_loser': 0, 'total_costs': 0, 'gross_pnl': 0}
 
-    wins = int((trades_df["reason"] == "TP").sum())
-    losses = int((trades_df["reason"] == "SL").sum())
-    pnl = float(trades_df["pnl"].sum())
-    gross_profit = float(trades_df.loc[trades_df["pnl"] > 0, "pnl"].sum())
-    gross_loss = float(-trades_df.loc[trades_df["pnl"] < 0, "pnl"].sum())
-    pf = (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
-    winrate = 100.0 * wins / len(trades_df)
-    rr = (tp / sl) if sl > 0 else float("nan")
-    return trades_df, dict(trades=len(trades_df), wins=wins, losses=losses, pnl=pnl,
-                           pf=pf, winrate=winrate, gross_profit=gross_profit, gross_loss=gross_loss, rr=rr)
+    # Calculate statistics
+    wins = (trades_df['reason'] == 'TP').sum()
+    losses = (trades_df['reason'] == 'SL').sum()
+    total_pnl = trades_df['pnl'].sum()
+    total_costs = trades_df['costs'].sum() if use_costs else 0
+    gross_pnl = total_pnl + total_costs  # PnL before costs
 
-# ----------------------------- Optimized Main --------------------------------
-def process_combo(args):
-    df, tz, pre_s, sess_s, sl, tp, confirm, samebar, date_from, date_to = args
-    return run_backtest(df, tz, pre_s, sess_s, sl, tp, confirm, samebar, date_from, date_to)
+    winning_trades = trades_df[trades_df['pnl'] > 0]
+    losing_trades = trades_df[trades_df['pnl'] < 0]
 
+    stats = {'trades': len(trades_df), 'wins': wins, 'losses': losses, 'pnl': total_pnl,
+        'gross_pnl': gross_pnl, 'total_costs': total_costs,
+        'winrate': 100 * wins / len(trades_df) if len(trades_df) > 0 else 0,
+        'pf': winning_trades['pnl'].sum() / abs(losing_trades['pnl'].sum()) if len(
+            losing_trades) > 0 else float('inf'),
+        'avg_winner': winning_trades['pnl'].mean() if len(winning_trades) > 0 else 0,
+        'avg_loser': losing_trades['pnl'].mean() if len(losing_trades) > 0 else 0,
+        'max_dd': calculate_max_drawdown(trades_df['pnl']),
+        'sharpe': calculate_sharpe_ratio(trades_df['pnl'])}
+
+    return trades_df, stats
+
+
+def calculate_max_drawdown(pnl_series):
+    """Calculate maximum drawdown"""
+    cumsum = pnl_series.cumsum()
+    running_max = cumsum.expanding().max()
+    drawdown = cumsum - running_max
+    return float(drawdown.min())
+
+
+def calculate_sharpe_ratio(pnl_series, periods_per_year=252 * 390):
+    """Calculate Sharpe ratio (assuming minute data)"""
+    if len(pnl_series) < 2:
+        return 0
+    returns = pnl_series
+    if returns.std() == 0:
+        return 0
+    return float(np.sqrt(periods_per_year) * returns.mean() / returns.std())
+
+
+# ============================= Visualization ========================================
+def create_comprehensive_plots(df, trades_df, stats, args):
+    """Create comprehensive analysis plots"""
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    fig = plt.figure(figsize=(20, 12))
+    gs = GridSpec(3, 3, figure=fig, hspace=0.3, wspace=0.3)
+
+    # 1. Equity Curve with Drawdown
+    ax1 = fig.add_subplot(gs[0, :2])
+    if not trades_df.empty:
+        trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
+        trades_df['running_max'] = trades_df['cumulative_pnl'].expanding().max()
+        trades_df['drawdown'] = trades_df['cumulative_pnl'] - trades_df['running_max']
+
+        ax1.plot(range(len(trades_df)), trades_df['cumulative_pnl'], 'b-',
+                 label='Equity', linewidth=2)
+        ax1.fill_between(range(len(trades_df)), trades_df['cumulative_pnl'],
+                         trades_df['running_max'], alpha=0.3, color='red',
+                         label='Drawdown')
+        ax1.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        ax1.set_title(f'Equity Curve ({"With" if args.realistic else "Without"} Costs)')
+        ax1.set_xlabel('Trade Number')
+        ax1.set_ylabel('Cumulative PnL (points)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+    # 2. Win/Loss Distribution
+    ax2 = fig.add_subplot(gs[0, 2])
+    if stats['trades'] > 0:
+        sizes = [stats['wins'], stats['losses']]
+        colors = ['green', 'red']
+        ax2.pie(sizes, labels=['Wins', 'Losses'], colors=colors, autopct='%1.1f%%')
+        ax2.set_title(f"Win Rate: {stats['winrate']:.1f}%")
+
+    # 3. PnL Distribution
+    ax3 = fig.add_subplot(gs[1, 0])
+    if not trades_df.empty:
+        ax3.hist(trades_df['pnl'], bins=30, alpha=0.7, color='blue', edgecolor='black')
+        ax3.axvline(x=0, color='red', linestyle='--', alpha=0.8)
+        ax3.axvline(x=trades_df['pnl'].mean(), color='green', linestyle='--', alpha=0.8,
+                    label=f'Mean: {trades_df["pnl"].mean():.2f}')
+        ax3.set_title('PnL Distribution')
+        ax3.set_xlabel('PnL (points)')
+        ax3.set_ylabel('Frequency')
+        ax3.legend()
+
+    # 4. Time of Day Analysis
+    ax4 = fig.add_subplot(gs[1, 1])
+    if not trades_df.empty:
+        trades_df['entry_hour'] = pd.to_datetime(trades_df['entry_time']).dt.hour
+        hourly_pnl = trades_df.groupby('entry_hour')['pnl'].sum()
+        colors = ['green' if x > 0 else 'red' for x in hourly_pnl.values]
+        ax4.bar(hourly_pnl.index, hourly_pnl.values, color=colors, alpha=0.7,
+                edgecolor='black')
+        ax4.set_title('PnL by Entry Hour')
+        ax4.set_xlabel('Hour')
+        ax4.set_ylabel('Total PnL')
+        ax4.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+
+    # 5. Recent Trades Performance
+    ax5 = fig.add_subplot(gs[1, 2])
+    if not trades_df.empty:
+        recent = trades_df.tail(20)
+        colors = ['green' if x > 0 else 'red' for x in recent['pnl']]
+        ax5.bar(range(len(recent)), recent['pnl'], color=colors, alpha=0.7,
+                edgecolor='black')
+        ax5.set_title('Last 20 Trades')
+        ax5.set_xlabel('Trade')
+        ax5.set_ylabel('PnL')
+        ax5.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+
+    # 6. Statistics Table
+    ax6 = fig.add_subplot(gs[2, :])
+    ax6.axis('tight')
+    ax6.axis('off')
+
+    # Create statistics table
+    table_data = [['Metric', 'Value', 'Metric', 'Value'],
+        ['Total Trades', f"{stats['trades']}", 'Win Rate', f"{stats['winrate']:.1f}%"],
+        ['Wins', f"{stats['wins']}", 'Losses', f"{stats['losses']}"],
+        ['Net PnL', f"{stats['pnl']:.1f}", 'Gross PnL', f"{stats['gross_pnl']:.1f}"],
+        ['Total Costs', f"{stats['total_costs']:.1f}", 'Profit Factor',
+         f"{stats['pf']:.2f}"],
+        ['Avg Winner', f"{stats['avg_winner']:.1f}", 'Avg Loser',
+         f"{stats['avg_loser']:.1f}"],
+        ['Max Drawdown', f"{stats['max_dd']:.1f}", 'Sharpe Ratio',
+         f"{stats['sharpe']:.3f}"], ['Required WR (BE)',
+                                     f"{100 * args.sl_min / (args.sl_min + args.tp_min):.1f}%" if not args.tradertom else "60.0%",
+                                     'Actual vs Required',
+                                     f"{stats['winrate'] - 100 * args.sl_min / (args.sl_min + args.tp_min):.1f}%" if not args.tradertom else f"{stats['winrate'] - 60:.1f}%"]]
+
+    table = ax6.table(cellText=table_data, cellLoc='center', loc='center',
+                      colWidths=[0.2, 0.2, 0.2, 0.2])
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
+
+    # Color header
+    for i in range(4):
+        table[(0, i)].set_facecolor('#40466e')
+        table[(0, i)].set_text_props(weight='bold', color='white')
+
+    # Color cells based on values
+    if stats['pnl'] > 0:
+        table[(3, 1)].set_facecolor('#90EE90')
+    else:
+        table[(3, 1)].set_facecolor('#FFB6C1')
+
+    fig.suptitle(
+        f'DAX ORB Analysis - {"TraderTom Mode" if args.tradertom else "Parameter Sweep"} - {"With Realistic Costs" if args.realistic else "Without Costs"}',
+        fontsize=16, fontweight='bold')
+
+    plt.savefig('dax_orb_analysis.png', dpi=150, bbox_inches='tight')
+    plt.show()
+    print("\n✓ Analysis saved to dax_orb_analysis.png")
+
+
+# ============================= Main =================================================
 def main():
-    a = parse_args()
-    df_utc = read_merge_csv(a.paths)
+    args = parse_args()
 
-    print("=== TraderTom DAX ORB — Optimized SL/TP Sweep ===")
-    print(f"Timezone(server): {a.tz} | Premarket: {a.pre} | Session: {a.sess}")
-    print(f"Entry: confirm={a.confirm}, samebar={a.samebar}")
-    print(f"Grid SL: {a.sl_min}..{a.sl_max} step {a.sl_step} | TP: {a.tp_min}..{a.tp_max} step {a.tp_step}")
-    if a.date_from or a.date_to:
-        print(f"Period filter: {a.date_from or '-'} to {a.date_to or '-'}")
-    print("-" * 72)
+    print("=" * 80)
+    print("DAX ORB REALISTIC BACKTEST - With Transaction Costs")
+    print("=" * 80)
 
-    sl_vals = list(np.arange(a.sl_min, a.sl_max + a.sl_step, a.sl_step))
-    tp_vals = list(np.arange(a.tp_min, a.tp_max + a.tp_step, a.tp_step))
-    total = len(sl_vals) * len(tp_vals)
-    done = 0
-    t0 = time.perf_counter()
-    t_last = t0
+    # Load data
+    df = load_data(args)
 
-    def maybe_progress(force=False):
-        nonlocal done, t_last
-        now = time.perf_counter()
-        if force or (now - t_last) >= a.progress_sec:
-            elapsed = now - t0
-            pct = done / total if total else 1.0
-            eta = (elapsed / pct - elapsed) if done else 0.0
-            print(f"\rProgress: {done}/{total} ({pct:.2%}) | Elapsed: {fmt_secs(elapsed)} | ETA: {fmt_secs(eta)}",
-                  end="", flush=True)
-            t_last = now
+    # Split into train/test if not in TraderTom mode
+    if not args.tradertom and args.train_pct < 1.0:
+        split_idx = int(len(df) * args.train_pct)
+        df_train = df.iloc[:split_idx].copy()
+        df_test = df.iloc[split_idx:].copy()
+        print(
+            f"\n✓ Data split: {len(df_train):,} train bars, {len(df_test):,} test bars")
+    else:
+        df_train = df.copy()
+        df_test = None
 
-    # Parallel execution
-    with mp.Pool() as pool:
-        combos = [(df_utc, a.tz, a.pre, a.sess, sl, tp, a.confirm, a.samebar, a.date_from, a.date_to)
-                  for sl in sl_vals for tp in tp_vals]
-        results = pool.map(process_combo, combos)
+    # Run backtest
+    if args.tradertom:
+        # TraderTom fixed parameters
+        print(
+            f"\n🎯 TRADERTOM MODE: SL=9, TP=6, Opening window={args.opening_window} min")
+        print(f"   Realistic costs: {'ON' if args.realistic else 'OFF'}")
 
-    # Process results
-    rows = []
-    best = None
-    for i, (trades_df, s) in enumerate(results):
-        done += 1
-        maybe_progress(force=(done == 1 or done == total))
-        if s["trades"] < a.min_trades:
-            continue
-        be_winrate = 100.0 * (sl / (sl + tp))
-        row = dict(sl=sl, tp=tp, rr=(tp / sl), trades=s["trades"], winrate=s["winrate"],
-                   pnl=s["pnl"], gross_profit=s["gross_profit"], gross_loss=s["gross_loss"],
-                   pf=s["pf"], be_winrate=be_winrate)
-        rows.append(row)
-        score = (float("inf") if s["pf"] == float("inf") else s["pf"], s["pnl"], s["winrate"], s["trades"])
-        if best is None or score > best[0]:
-            best = (score, dict(row), trades_df.copy())
+        # Run with costs
+        trades_with_costs, stats_with_costs = run_realistic_backtest(df_train, args.tz,
+            args.pre, args.sess, sl=9.0, tp=6.0, use_costs=True, tradertom_mode=True,
+            opening_window=args.opening_window, verbose=args.verbose)
 
-    print()  # newline after \r
-    total_elapsed = time.perf_counter() - t0
-    print(f"Completed in: {fmt_secs(total_elapsed)}")
+        # Run without costs for comparison
+        trades_no_costs, stats_no_costs = run_realistic_backtest(df_train, args.tz,
+            args.pre, args.sess, sl=9.0, tp=6.0, use_costs=False, tradertom_mode=True,
+            opening_window=args.opening_window, verbose=False)
 
-    if not rows:
-        print("No combinations with sufficient trades found. Lower --min-trades or extend period.")
-        return
+        # Display results
+        print("\n" + "=" * 60)
+        print("RESULTS COMPARISON:")
+        print("=" * 60)
 
-    res = pd.DataFrame(rows).sort_values(["pf", "pnl", "winrate", "trades"], ascending=[False, False, False, False])
-    res.to_csv(a.out, index=False)
+        print("\n📊 WITHOUT COSTS (Unrealistic):")
+        print(f"   Trades: {stats_no_costs['trades']}")
+        print(
+            f"   Win Rate: {stats_no_costs['winrate']:.1f}% (Need 60.0% for break-even)")
+        print(f"   Net PnL: {stats_no_costs['pnl']:.1f} points")
+        print(f"   Profit Factor: {stats_no_costs['pf']:.2f}")
 
-    print("\nTop 10 combinations (filtered by min-trades):")
-    print(res.head(10).to_string(index=False, formatters={
-        "sl": "{:.2f}".format, "tp": "{:.2f}".format, "rr": "{:.2f}".format,
-        "winrate": "{:.2f}%".format, "pf": "{:.3f}".format, "pnl": "{:.2f}".format,
-        "gross_profit": "{:.2f}".format, "gross_loss": "{:.2f}".format,
-        "be_winrate": "{:.2f}%".format
-    }))
+        print("\n💰 WITH REALISTIC COSTS:")
+        print(f"   Trades: {stats_with_costs['trades']}")
+        print(f"   Win Rate: {stats_with_costs['winrate']:.1f}% (Need ~70% with costs)")
+        print(f"   Net PnL: {stats_with_costs['pnl']:.1f} points")
+        print(f"   Total Costs Paid: {stats_with_costs['total_costs']:.1f} points")
+        print(f"   Profit Factor: {stats_with_costs['pf']:.2f}")
+        print(f"   Max Drawdown: {stats_with_costs['max_dd']:.1f} points")
 
-    best_row = best[1]
-    print("\n=== Best combo (by PF, then PnL, winrate, trades) ===")
-    print(f"SL={best_row['sl']:.2f} | TP={best_row['tp']:.2f} | RR={best_row['rr']:.2f}")
-    print(f"Trades={best_row['trades']} | Winrate={best_row['winrate']:.2f}% | BE-winrate={best_row['be_winrate']:.2f}%")
-    print(f"PF={best_row['pf']:.3f} | PnL={best_row['pnl']:.2f} (GP={best_row['gross_profit']:.2f}, GL={best_row['gross_loss']:.2f})")
-    print(f"\nAll results saved in: {a.out}")
+        impact = stats_no_costs['pnl'] - stats_with_costs['pnl']
+        print(
+            f"\n⚠️  COST IMPACT: -{impact:.1f} points ({100 * impact / max(abs(stats_no_costs['pnl']), 1):.1f}% of gross PnL)")
 
-    if a.save_best_trades and best[2] is not None and not best[2].empty:
-        best[2][["day", "entry_time", "exit_time", "side", "entry", "exit", "reason", "pnl"]].to_csv(a.best_trades_out, index=False)
-        print(f"Best trades saved in: {a.best_trades_out}")
+        # Critical assessment
+        print("\n" + "=" * 60)
+        print("🔍 CRITICAL ASSESSMENT:")
+        print("=" * 60)
+
+        if stats_with_costs['winrate'] < 60:
+            print("❌ Win rate below break-even threshold (60% without costs)")
+        if stats_with_costs['winrate'] < 70:
+            print("❌ Win rate below realistic break-even (~70% with costs)")
+        if stats_with_costs['pnl'] < 0:
+            print("❌ Strategy is UNPROFITABLE with realistic costs")
+        if stats_with_costs['trades'] < 100:
+            print("⚠️  Sample size too small for statistical significance")
+        if abs(stats_with_costs['max_dd']) > 50:
+            print("⚠️  Large drawdown risk")
+
+        # Save trades if requested
+        if args.save_trades:
+            trades_with_costs.to_csv('tradertom_trades_realistic.csv', index=False)
+            print(f"\n✓ Trades saved to tradertom_trades_realistic.csv")
+
+        # Create plots
+        if args.plot:
+            create_comprehensive_plots(df_train, trades_with_costs, stats_with_costs,
+                                       args)
+
+    else:
+        # Parameter sweep mode
+        print(f"\n🔍 PARAMETER SWEEP MODE")
+        print(f"   SL range: {args.sl_min}-{args.sl_max} (step {args.sl_step})")
+        print(f"   TP range: {args.tp_min}-{args.tp_max} (step {args.tp_step})")
+        print(f"   Realistic costs: {'ON' if args.realistic else 'OFF'}")
+
+        # Create parameter combinations
+        sl_values = np.arange(args.sl_min, args.sl_max + args.sl_step, args.sl_step)
+        tp_values = np.arange(args.tp_min, args.tp_max + args.tp_step, args.tp_step)
+
+        results = []
+        best_score = -float('inf')
+        best_params = None
+        best_trades = None
+
+        total_combos = len(sl_values) * len(tp_values)
+        completed = 0
+
+        print(f"\n   Testing {total_combos} combinations...")
+
+        # Test each combination
+        with mp.Pool() as pool:
+            tasks = [
+                (df_train, args.tz, args.pre, args.sess, sl, tp, args.realistic, False,
+                 args.opening_window, False) for sl in sl_values for tp in tp_values]
+
+            async_results = [pool.apply_async(run_realistic_backtest, task) for task in
+                tasks]
+
+            for i, (sl, tp) in enumerate(
+                    [(sl, tp) for sl in sl_values for tp in tp_values]):
+                trades_df, stats = async_results[i].get()
+                completed += 1
+
+                if completed % 10 == 0 or completed == total_combos:
+                    print(
+                        f"\r   Progress: {completed}/{total_combos} ({100 * completed / total_combos:.1f}%)",
+                        end='')
+
+                if stats['trades'] >= args.min_trades:
+                    score = stats['pnl'] / max(abs(stats['max_dd']),
+                                               1)  # Risk-adjusted score
+
+                    results.append(
+                        {'sl': sl, 'tp': tp, 'rr': tp / sl, 'trades': stats['trades'],
+                            'winrate': stats['winrate'], 'pnl': stats['pnl'],
+                            'pf': stats['pf'], 'max_dd': stats['max_dd'],
+                            'sharpe': stats['sharpe'], 'score': score})
+
+                    if score > best_score:
+                        best_score = score
+                        best_params = (sl, tp)
+                        best_trades = trades_df.copy()
+
+        print()  # New line after progress
+
+        if results:
+            # Sort and display results
+            results_df = pd.DataFrame(results).sort_values('score', ascending=False)
+
+            print("\n" + "=" * 60)
+            print("TOP 10 PARAMETER COMBINATIONS:")
+            print("=" * 60)
+            print(results_df.head(10).to_string(index=False))
+
+            # Test on out-of-sample data if available
+            if df_test is not None and best_params is not None:
+                print("\n" + "=" * 60)
+                print("OUT-OF-SAMPLE TEST:")
+                print("=" * 60)
+
+                test_trades, test_stats = run_realistic_backtest(df_test, args.tz,
+                    args.pre, args.sess, sl=best_params[0], tp=best_params[1],
+                    use_costs=args.realistic, tradertom_mode=False,
+                    opening_window=args.opening_window)
+
+                print(f"Best params: SL={best_params[0]:.1f}, TP={best_params[1]:.1f}")
+                print(f"In-sample PnL: {results_df.iloc[0]['pnl']:.1f}")
+                print(f"Out-of-sample PnL: {test_stats['pnl']:.1f}")
+                print(f"Out-of-sample Win Rate: {test_stats['winrate']:.1f}%")
+
+                if test_stats['pnl'] < 0:
+                    print("❌ Strategy FAILED on out-of-sample data!")
+
+            # Save results
+            results_df.to_csv('parameter_sweep_results.csv', index=False)
+            print(f"\n✓ Results saved to parameter_sweep_results.csv")
+
+            # Create plots for best combination
+            if args.plot and best_trades is not None:
+                create_comprehensive_plots(df_train, best_trades,
+                                           results_df.iloc[0].to_dict(), args)
+        else:
+            print("\n❌ No parameter combinations met minimum trade requirement")
+
 
 if __name__ == "__main__":
     main()
