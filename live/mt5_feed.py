@@ -4,10 +4,10 @@ MT5 Live Feed for real-time M1 data streaming.
 """
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
-import time
-import logging
 
 import pandas as pd
 

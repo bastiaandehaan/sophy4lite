@@ -4,12 +4,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from live.mt5_feed import MT5FeedCfg, MT5LiveM1
-
 from backtest.mtf_exec_fast import (
-    backtest_mtf_confluence_fast as backtest_mtf_confluence,
-    MTFExecCfg,
- )
+    backtest_mtf_confluence_fast as backtest_mtf_confluence, MTFExecCfg, )
+from live.mt5_feed import MT5FeedCfg, MT5LiveM1
 from strategies.mtf_confluence import MTFParams
 
 logging.basicConfig(level=logging.INFO)

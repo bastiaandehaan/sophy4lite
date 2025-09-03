@@ -6,8 +6,8 @@ Inclusief smoke test met synthetische data en look-ahead bias detection
 import numpy as np
 import pandas as pd
 import pytest
-
 from backtest.mtf_exec import backtest_mtf_confluence, MTFExecCfg
+
 from strategies.mtf_confluence import MTFSignals, MTFParams
 
 

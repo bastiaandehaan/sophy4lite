@@ -1,11 +1,14 @@
 # backtest/mtf_exec_fast.py
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple
+
 import numpy as np
 import pandas as pd
+
 from strategies.mtf_confluence import MTFSignals, MTFParams
-from utils.specs import get_spec, SymbolSpec
+from utils.specs import get_spec
 
 
 @dataclass(frozen=True)

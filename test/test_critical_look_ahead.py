@@ -6,6 +6,7 @@ Als deze test faalt, verlies je GEGARANDEERD geld live!
 
 import numpy as np
 import pandas as pd
+
 from strategies.mtf_confluence import MTFSignals, MTFParams
 
 
