@@ -29,7 +29,7 @@ class MTFParams:
     atr_mult_tp: float = 2.5
     # Signal quality
     min_confluence_score: float = 0.65
-    # Optional: EV filter (off by default to avoid bias)
+    # Optional EV filter (off by default to avoid bias)
     use_ev_in_filter: bool = False
     min_ev_R: float = 0.0
 
@@ -57,7 +57,6 @@ class MTFSignals:
             raise KeyError(f"DataFrame missing columns: {sorted(miss)}")
 
         tfs: Dict[str, pd.DataFrame] = {"M1": df_m1.copy()}
-
         agg = {
             "open": "first",
             "high": "max",
@@ -73,7 +72,6 @@ class MTFSignals:
     # ---------- H1 bias ----------
     def calculate_bias(self, df_h1: pd.DataFrame) -> pd.Series:
         ema = df_h1["close"].ewm(span=self.params.ema_period, adjust=False).mean()
-
         h, l, c = df_h1["high"], df_h1["low"], df_h1["close"]
         tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
         atr = tr.ewm(span=self.params.atr_period, adjust=False).mean()
@@ -183,7 +181,7 @@ class MTFSignals:
         entry: float,
         sl: float,
         tp: float,
-        win_rate: float = 0.58,  # keep your default
+        win_rate: float = 0.58,
     ) -> float:
         risk = abs(entry - sl)
         reward = abs(tp - entry)
@@ -234,17 +232,13 @@ class MTFSignals:
         signals["long_score"] = signals.apply(
             lambda r: self.calculate_confluence_score(
                 r["bias"], r["at_support"], False, r["bullish_pattern"], r["momentum"]
-            )
-            if pd.notna(r["bias"])
-            else 0.0,
+            ) if pd.notna(r["bias"]) else 0.0,
             axis=1,
         )
         signals["short_score"] = signals.apply(
             lambda r: self.calculate_confluence_score(
                 r["bias"], False, r["at_resistance"], r["bearish_pattern"], -r["momentum"]
-            )
-            if pd.notna(r["bias"])
-            else 0.0,
+            ) if pd.notna(r["bias"]) else 0.0,
             axis=1,
         )
 
@@ -261,14 +255,12 @@ class MTFSignals:
         # EV (calculated; optionally used as filter)
         signals["long_ev"] = signals.apply(
             lambda r: self.calculate_expected_value(df_m1.loc[r.name, "close"], r["long_sl"], r["long_tp"])
-            if r.name in df_m1.index
-            else 0.0,
+            if r.name in df_m1.index else 0.0,
             axis=1,
         )
         signals["short_ev"] = signals.apply(
             lambda r: self.calculate_expected_value(df_m1.loc[r.name, "close"], r["short_sl"], r["short_tp"])
-            if r.name in df_m1.index
-            else 0.0,
+            if r.name in df_m1.index else 0.0,
             axis=1,
         )
 
@@ -300,9 +292,9 @@ class MTFSignals:
         )
         filtered["long_entry"] = False
         filtered["short_entry"] = False
-        for idx in daily_best:
-            if filtered.loc[idx, "best_side"] == "long":
-                filtered.loc[idx, "long_entry"] = True
+        for ts in daily_best.to_list():
+            if filtered.loc[ts, "best_side"] == "long":
+                filtered.loc[ts, "long_entry"] = True
             else:
-                filtered.loc[idx, "short_entry"] = True
+                filtered.loc[ts, "short_entry"] = True
         return filtered
