@@ -1,10 +1,8 @@
-# strategies/mtf_confluence.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List
-
 import pandas as pd
 
 
@@ -30,7 +28,7 @@ class MTFParams:
     atr_mult_tp: float = 2.5
     # Signal quality
     min_confluence_score: float = 0.65
-    # Optional EV filter (off by default to avoid bias)
+    # Optional: EV filter (off by default to avoid bias)
     use_ev_in_filter: bool = False
     min_ev_R: float = 0.0
 
@@ -58,6 +56,7 @@ class MTFSignals:
             raise KeyError(f"DataFrame missing columns: {sorted(miss)}")
 
         tfs: Dict[str, pd.DataFrame] = {"M1": df_m1.copy()}
+
         agg = {
             "open": "first",
             "high": "max",
@@ -73,6 +72,7 @@ class MTFSignals:
     # ---------- H1 bias ----------
     def calculate_bias(self, df_h1: pd.DataFrame) -> pd.Series:
         ema = df_h1["close"].ewm(span=self.params.ema_period, adjust=False).mean()
+
         h, l, c = df_h1["high"], df_h1["low"], df_h1["close"]
         tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
         atr = tr.ewm(span=self.params.atr_period, adjust=False).mean()
@@ -144,9 +144,9 @@ class MTFSignals:
     # ---------- M1 micro-momentum ----------
     def calculate_momentum(self, df_m1: pd.DataFrame, window: int = 10) -> pd.Series:
         roc = df_m1["close"].pct_change(window)
-        momentum = roc / roc.rolling(50).std()
-        momentum = momentum.clip(-2, 2) / 2  # scale to [-1,1]
-        return momentum.fillna(0)
+        z = roc / roc.rolling(50).std()
+        z = z.clip(-2, 2) / 2.0  # scale to [-1,1]
+        return z.fillna(0.0)
 
     # ---------- Confluence score ----------
     def calculate_confluence_score(
@@ -233,18 +233,22 @@ class MTFSignals:
         signals["long_score"] = signals.apply(
             lambda r: self.calculate_confluence_score(
                 r["bias"], r["at_support"], False, r["bullish_pattern"], r["momentum"]
-            ) if pd.notna(r["bias"]) else 0.0,
+            )
+            if pd.notna(r["bias"])
+            else 0.0,
             axis=1,
         )
         signals["short_score"] = signals.apply(
             lambda r: self.calculate_confluence_score(
                 r["bias"], False, r["at_resistance"], r["bearish_pattern"], -r["momentum"]
-            ) if pd.notna(r["bias"]) else 0.0,
+            )
+            if pd.notna(r["bias"])
+            else 0.0,
             axis=1,
         )
 
-        # Session filter (DST-safe)
-        in_session_index = df_m1.between_time(session_start, session_end, include_end=False).index
+        # Session filter (DST-safe)  **FIX: pandas >=1.4 uses `inclusive=`**
+        in_session_index = df_m1.between_time(session_start, session_end, inclusive="left").index
         in_session_mask = df_m1.index.isin(in_session_index)
 
         # SL/TP levels (using lagged M15 ATR)
@@ -256,12 +260,14 @@ class MTFSignals:
         # EV (calculated; optionally used as filter)
         signals["long_ev"] = signals.apply(
             lambda r: self.calculate_expected_value(df_m1.loc[r.name, "close"], r["long_sl"], r["long_tp"])
-            if r.name in df_m1.index else 0.0,
+            if r.name in df_m1.index
+            else 0.0,
             axis=1,
         )
         signals["short_ev"] = signals.apply(
             lambda r: self.calculate_expected_value(df_m1.loc[r.name, "close"], r["short_sl"], r["short_tp"])
-            if r.name in df_m1.index else 0.0,
+            if r.name in df_m1.index
+            else 0.0,
             axis=1,
         )
 
@@ -293,9 +299,9 @@ class MTFSignals:
         )
         filtered["long_entry"] = False
         filtered["short_entry"] = False
-        for ts in daily_best.to_list():
-            if filtered.loc[ts, "best_side"] == "long":
-                filtered.loc[ts, "long_entry"] = True
+        for idx in daily_best:
+            if filtered.loc[idx, "best_side"] == "long":
+                filtered.loc[idx, "long_entry"] = True
             else:
-                filtered.loc[ts, "short_entry"] = True
+                filtered.loc[idx, "short_entry"] = True
         return filtered
