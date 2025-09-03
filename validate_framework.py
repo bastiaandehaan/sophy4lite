@@ -20,7 +20,7 @@ class FrameworkValidator:
 
     def validate_all(self) -> bool:
         """Hoofdfunctie die alle checks uitvoert."""
-        print("🔍 Starting Sophy4Lite Framework Validation...\n")
+        print(">> Starting Sophy4Lite Framework Validation...\n")
 
         # 1. Python syntax check
         self._check_syntax()
@@ -44,7 +44,7 @@ class FrameworkValidator:
 
     def _check_syntax(self):
         """Controleert Python syntax in alle .py files."""
-        print("1️⃣ Checking Python syntax...")
+        print("1. Checking Python syntax...")
 
         for py_file in self.root.rglob("*.py"):
             if ".venv" in str(py_file) or "__pycache__" in str(py_file):
@@ -58,11 +58,11 @@ class FrameworkValidator:
                     {'file': str(py_file.relative_to(self.root)), 'line': e.lineno,
                         'type': 'SyntaxError', 'msg': str(e.msg)})
 
-        print(f"   ✓ Checked {len(list(self.root.rglob('*.py')))} files\n")
+        print(f"   >> Checked {len(list(self.root.rglob('*.py')))} files\n")
 
     def _check_imports(self):
         """Valideert alle imports."""
-        print("2️⃣ Checking imports...")
+        print("2. Checking imports...")
 
         # KRITIEKE FIX voor live_trading.py
         live_trading = self.root / "live" / "live_trading.py"
@@ -82,7 +82,7 @@ class FrameworkValidator:
 
             self._validate_file_imports(py_file)
 
-        print(f"   ✓ Import validation complete\n")
+        print(f"   >> Import validation complete\n")
 
     def _validate_file_imports(self, file_path: Path):
         """Valideert imports in een specifiek bestand."""
@@ -137,7 +137,7 @@ class FrameworkValidator:
 
     def _check_required_files(self):
         """Controleert of alle vereiste bestanden aanwezig zijn."""
-        print("3️⃣ Checking required files...")
+        print("3. Checking required files...")
 
         required = ['backtest/__init__.py', 'cli/__init__.py', 'risk/__init__.py',
             'strategies/__init__.py', 'utils/__init__.py', 'config.py',
@@ -155,11 +155,11 @@ class FrameworkValidator:
                 {'msg': "Output directory missing - will cause crash in config.py",
                     'fix': "Run: mkdir output"})
 
-        print(f"   ✓ File structure validated\n")
+        print(f"   >> File structure validated\n")
 
     def _check_types(self):
         """Optioneel: run mypy voor type checking."""
-        print("4️⃣ Checking types (if mypy available)...")
+        print("4. Checking types (if mypy available)...")
 
         try:
             result = subprocess.run(
@@ -171,13 +171,13 @@ class FrameworkValidator:
                     if 'error:' in line:
                         self.warnings.append({'msg': line.strip()})
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            print("   ⚠️ mypy not available, skipping type checks")
+            print("   WARNING: mypy not available, skipping type checks")
 
         print()
 
     def _check_framework_specific(self):
         """Sophy4Lite specifieke validaties."""
-        print("5️⃣ Checking Sophy4Lite specific requirements...")
+        print("5. Checking Sophy4Lite specific requirements...")
 
         # Check timezone handling
         breakout_exec = self.root / "backtest" / "breakout_exec.py"
@@ -201,7 +201,7 @@ class FrameworkValidator:
                             'msg': "Potential look-ahead bias in ATR calculation",
                             'fix': "Verify that w.index.max() doesn't include future data"})
 
-        print(f"   ✓ Framework validation complete\n")
+        print(f"   >> Framework validation complete\n")
 
     def _print_report(self):
         """Print het eindrapport."""
@@ -210,7 +210,7 @@ class FrameworkValidator:
         print("=" * 60)
 
         if self.errors:
-            print(f"\n❌ CRITICAL ERRORS ({len(self.errors)}):\n")
+            print(f"\nCRITICAL ERRORS ({len(self.errors)}):")
             for i, err in enumerate(self.errors, 1):
                 print(f"  {i}. [{err['type']}] {err['file']}")
                 if 'line' in err:
@@ -222,7 +222,7 @@ class FrameworkValidator:
                 print()
 
         if self.warnings:
-            print(f"\n⚠️ WARNINGS ({len(self.warnings)}):\n")
+            print(f"\nWARNINGS ({len(self.warnings)}):")
             for i, warn in enumerate(self.warnings, 1):
                 if 'file' in warn:
                     print(f"  {i}. {warn['file']}")
@@ -234,17 +234,17 @@ class FrameworkValidator:
                 print()
 
         if not self.errors and not self.warnings:
-            print("\n✅ All checks passed! Framework is ready to run.\n")
+            print("\n>> All checks passed! Framework is ready to run.\n")
         elif self.errors:
             print("\n🛑 Fix critical errors before running the framework!\n")
         else:
-            print("\n✅ No critical errors, but review warnings.\n")
+            print("\n>> No critical errors, but review warnings.\n")
 
         print("=" * 60)
 
         # Quick fixes sectie
         if self.errors:
-            print("\n🔧 QUICK FIXES TO APPLY:")
+            print("\n>> QUICK FIXES TO APPLY:")
             print("-" * 40)
             print("1. Fix import in live/live_trading.py:")
             print("   DELETE line 6: from risk.ftmo import fixed_percent_sizing")
@@ -257,13 +257,13 @@ class FrameworkValidator:
 
 def auto_fix_critical_issues():
     """Automatisch fixen van de meest kritieke issues."""
-    print("\n🔧 Attempting auto-fixes...\n")
+    print("\n>> Attempting auto-fixes...\n")
 
     # Fix 1: Maak output directory
     output_dir = Path.cwd() / 'output'
     if not output_dir.exists():
         output_dir.mkdir(exist_ok=True)
-        print("✅ Created output/ directory")
+        print(">> Created output/ directory")
 
     # Fix 2: Comment out broken import
     live_trading = Path.cwd() / "live" / "live_trading.py"
@@ -277,7 +277,7 @@ def auto_fix_critical_issues():
                     i] = "# " + line + "# TODO: Create risk/ftmo.py or remove this import\n"
                 with open(live_trading, 'w') as f:
                     f.writelines(lines)
-                print("✅ Commented out broken import in live/live_trading.py")
+                print(">> Commented out broken import in live/live_trading.py")
                 break
 
     # Fix 3: Create missing __init__.py files
@@ -286,16 +286,16 @@ def auto_fix_critical_issues():
         init_file = Path.cwd() / module / '__init__.py'
         if (Path.cwd() / module).exists() and not init_file.exists():
             init_file.touch()
-            print(f"✅ Created {module}/__init__.py")
+            print(f">> Created {module}/__init__.py")
 
-    print("\n✨ Auto-fixes applied!\n")
+    print("\n>> Auto-fixes applied!\n")
 
 
 if __name__ == "__main__":
     validator = FrameworkValidator()
 
     # Vraag om auto-fix
-    print("🚀 Sophy4Lite Framework Validator\n")
+    print(">> Sophy4Lite Framework Validator\n")
     response = input(
         "Apply automatic fixes for critical issues? (y/n): ").strip().lower()
 
