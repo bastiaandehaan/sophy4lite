@@ -40,22 +40,10 @@ def save_results(eq, trades, metrics: dict, outdir: Path, symbol: str) -> None:
         pass
 
 
-def _run_confluence(
-    *,
-    symbol: str,
-    csv: Path,
-    start: Optional[str],
-    end: Optional[str],
-    server_tz: str,
-    session_start: str,
-    session_end: str,
-    risk_pct: float,
-    min_score: float,
-    max_daily: int,
-    mark_to_market: bool,
-    output_json: bool,
-    outdir: Optional[Path],
-) -> None:
+def _run_confluence(*, symbol: str, csv: Path, start: Optional[str], end: Optional[str],
+        server_tz: str, session_start: str, session_end: str, risk_pct: float,
+        min_score: float, max_daily: int, mark_to_market: bool, output_json: bool,
+        outdir: Optional[Path], ) -> None:
     # 1) Load
     from backtest.data_loader import fetch_data
     df = fetch_data(csv_path=csv, server_tz=server_tz, start=start, end=end)
@@ -66,34 +54,21 @@ def _run_confluence(
 
     # 3) Engine (fast)
     from backtest.mtf_exec_fast import backtest_mtf_confluence_fast, MTFExecCfg
-    cfg = MTFExecCfg(
-        risk_frac=risk_pct / 100.0,
-        mark_to_market=mark_to_market,
-    )
+    cfg = MTFExecCfg(risk_frac=risk_pct / 100.0, mark_to_market=mark_to_market, )
 
     # 4) Run
-    eq, trades, metrics = backtest_mtf_confluence_fast(
-        df,
-        symbol,
-        params,
-        cfg,
-        session_start=session_start,
-        session_end=session_end,
-        max_trades_per_day=max_daily,
-    )
+    eq, trades, metrics = backtest_mtf_confluence_fast(df, symbol, params, cfg,
+        session_start=session_start, session_end=session_end,
+        max_trades_per_day=max_daily, )
 
     # 5) Output
     if output_json:
-        output = {
-            "symbol": symbol,
-            "period": f"{df.index[0]} to {df.index[-1]}",
-            "metrics": metrics,
-            "trades_summary": {
-                "total": int(len(trades)),
-                "longs": int((trades["side"] == "long").sum()) if "side" in trades else 0,
-                "shorts": int((trades["side"] == "short").sum()) if "side" in trades else 0,
-            },
-        }
+        output = {"symbol": symbol, "period": f"{df.index[0]} to {df.index[-1]}",
+            "metrics": metrics, "trades_summary": {"total": int(len(trades)),
+                "longs": int(
+                    (trades["side"] == "long").sum()) if "side" in trades else 0,
+                "shorts": int(
+                    (trades["side"] == "short").sum()) if "side" in trades else 0, }, }
         print(json.dumps(output, default=float, indent=2))
     else:
         display_metrics_table(metrics)
@@ -102,89 +77,85 @@ def _run_confluence(
         save_results(eq, trades, metrics, outdir, symbol)
 
 
-# ---- Subcommand: confluence ----
-@app.command(help="Run Multi-Timeframe Confluence backtest on CSV (M1 OHLCV). Uses the fast vectorized engine.")
-def confluence(
-    symbol: str = typer.Argument(..., help="Instrument, bv. GER40.cash"),
-    csv: Path = typer.Option(..., help="Path to M1 CSV"),
-    start: Optional[str] = typer.Option(None, help="Start YYYY-MM-DD"),
-    end: Optional[str] = typer.Option(None, help="End YYYY-MM-DD"),
-    server_tz: str = typer.Option("Europe/Athens", help="Server timezone (e.g. Europe/Athens)"),
-    session_start: str = typer.Option("09:00", help="Session start (server TZ)"),
-    session_end: str = typer.Option("17:00", help="Session end (server TZ)"),
-    risk_pct: float = typer.Option(1.0, min=0.01, max=10.0, help="Risk % per trade"),
-    min_score: float = typer.Option(0.65, help="Min confluence score"),
-    max_daily: int = typer.Option(1, help="Max trades per day"),
-    mark_to_market: bool = typer.Option(False, help="Mark-to-market open positions at dataset end"),
-    output_json: bool = typer.Option(False, help="Print metrics as JSON"),
-    outdir: Optional[Path] = typer.Option(Path("output"), help="Directory to save results"),
-):
-    _run_confluence(
-        symbol=symbol,
-        csv=csv,
-        start=start,
-        end=end,
-        server_tz=server_tz,
-        session_start=session_start,
-        session_end=session_end,
-        risk_pct=risk_pct,
-        min_score=min_score,
-        max_daily=max_daily,
-        mark_to_market=mark_to_market,
-        output_json=output_json,
-        outdir=outdir,
-    )
+# ---- MAIN command (default) - expliciet zonder subcommands ----
+@app.command(name="run", help="Run MTF Confluence backtest (default command)")
+def run_backtest(
+        csv: Path = typer.Option(..., "--csv", "-c", help="Path to M1 CSV file"),
+        symbol: str = typer.Option("GER40.cash", "--symbol", "-s",
+                                   help="Instrument symbol"),
+        start: Optional[str] = typer.Option(None, "--start",
+                                            help="Start date YYYY-MM-DD"),
+        end: Optional[str] = typer.Option(None, "--end", help="End date YYYY-MM-DD"),
+        server_tz: str = typer.Option("Europe/Athens", "--server-tz",
+                                      help="Server timezone"),
+        session_start: str = typer.Option("09:00", "--session-start",
+                                          help="Session start time"),
+        session_end: str = typer.Option("17:00", "--session-end",
+                                        help="Session end time"),
+        risk_pct: float = typer.Option(1.0, "--risk-pct", "-r", min=0.01, max=10.0,
+                                       help="Risk % per trade"),
+        min_score: float = typer.Option(0.65, "--min-score",
+                                        help="Minimum confluence score"),
+        max_daily: int = typer.Option(1, "--max-daily", help="Max trades per day"),
+        mark_to_market: bool = typer.Option(False, "--mark-to-market",
+                                            help="Mark open positions at end"),
+        output_json: bool = typer.Option(False, "--output-json", "-j",
+                                         help="Output as JSON"),
+        outdir: Optional[Path] = typer.Option(Path("output"), "--outdir", "-o",
+                                              help="Output directory"), ):
+    """Main backtest command - gebruik dit voor normale runs."""
+    _run_confluence(symbol=symbol, csv=csv, start=start, end=end, server_tz=server_tz,
+        session_start=session_start, session_end=session_end, risk_pct=risk_pct,
+        min_score=min_score, max_daily=max_daily, mark_to_market=mark_to_market,
+        output_json=output_json, outdir=outdir, )
 
 
-# ---- Callback to allow default command without subcommand ----
-@app.callback(invoke_without_command=True)
-def root_as_default(
-    ctx: typer.Context,
-    symbol: Optional[str] = typer.Argument(
-        None, help="Instrument, bv. GER40.cash (je kunt ook het subcommand 'confluence' gebruiken)"
-    ),
-    csv: Optional[Path] = typer.Option(None, help="Path to M1 CSV"),
-    start: Optional[str] = typer.Option(None, help="Start YYYY-MM-DD"),
-    end: Optional[str] = typer.Option(None, help="End YYYY-MM-DD"),
-    server_tz: str = typer.Option("Europe/Athens", help="Server timezone (e.g. Europe/Athens)"),
-    session_start: str = typer.Option("09:00", help="Session start (server TZ)"),
-    session_end: str = typer.Option("17:00", help="Session end (server TZ)"),
-    risk_pct: float = typer.Option(1.0, min=0.01, max=10.0, help="Risk % per trade"),
-    min_score: float = typer.Option(0.65, help="Min confluence score"),
-    max_daily: int = typer.Option(1, help="Max trades per day"),
-    mark_to_market: bool = typer.Option(False, help="Mark-to-market open positions at dataset end"),
-    output_json: bool = typer.Option(False, help="Print metrics as JSON"),
-    outdir: Optional[Path] = typer.Option(Path("output"), help="Directory to save results"),
-):
-    # Als er een subcommand is aangeroepen, doe niks hier.
-    if ctx.invoked_subcommand is not None:
-        return
-
-    # Geen subcommand → gebruik confluence als default.
-    # Vereiste velden controleren:
-    if symbol is None or csv is None:
-        # Toon help als verplichte stukken ontbreken
-        typer.echo(ctx.get_help())
-        raise typer.Exit(code=0)
-
-    _run_confluence(
-        symbol=symbol,
-        csv=csv,
-        start=start,
-        end=end,
-        server_tz=server_tz,
-        session_start=session_start,
-        session_end=session_end,
-        risk_pct=risk_pct,
-        min_score=min_score,
-        max_daily=max_daily,
-        mark_to_market=mark_to_market,
-        output_json=output_json,
-        outdir=outdir,
-    )
+# ---- Legacy support: alias voor backward compatibility ----
+@app.command(name="confluence", help="Alias for 'run' command (backward compatibility)")
+def confluence(csv: Path = typer.Option(..., "--csv", "-c", help="Path to M1 CSV file"),
+        symbol: str = typer.Option("GER40.cash", "--symbol", "-s",
+                                   help="Instrument symbol"),
+        start: Optional[str] = typer.Option(None, "--start",
+                                            help="Start date YYYY-MM-DD"),
+        end: Optional[str] = typer.Option(None, "--end", help="End date YYYY-MM-DD"),
+        server_tz: str = typer.Option("Europe/Athens", "--server-tz",
+                                      help="Server timezone"),
+        session_start: str = typer.Option("09:00", "--session-start",
+                                          help="Session start time"),
+        session_end: str = typer.Option("17:00", "--session-end",
+                                        help="Session end time"),
+        risk_pct: float = typer.Option(1.0, "--risk-pct", "-r", min=0.01, max=10.0,
+                                       help="Risk % per trade"),
+        min_score: float = typer.Option(0.65, "--min-score",
+                                        help="Minimum confluence score"),
+        max_daily: int = typer.Option(1, "--max-daily", help="Max trades per day"),
+        mark_to_market: bool = typer.Option(False, "--mark-to-market",
+                                            help="Mark open positions at end"),
+        output_json: bool = typer.Option(False, "--output-json", "-j",
+                                         help="Output as JSON"),
+        outdir: Optional[Path] = typer.Option(Path("output"), "--outdir", "-o",
+                                              help="Output directory"), ):
+    """Backward compatibility - roept intern 'run' aan."""
+    _run_confluence(symbol=symbol, csv=csv, start=start, end=end, server_tz=server_tz,
+        session_start=session_start, session_end=session_end, risk_pct=risk_pct,
+        min_score=min_score, max_daily=max_daily, mark_to_market=mark_to_market,
+        output_json=output_json, outdir=outdir, )
 
 
+# ---- Geen callback meer - alleen expliciete commands ----
 def main():
+    # Check if no arguments given - show help
+    import sys
+    if len(sys.argv) == 1:
+        sys.argv.append("--help")
+
+    # Als alleen een CSV pad gegeven wordt, voeg 'run' command toe
+    if len(sys.argv) >= 2 and not sys.argv[1].startswith("-"):
+        if sys.argv[1].endswith(".csv"):
+            # User gaf direct een CSV - help ze door 'run --csv' te maken
+            sys.argv.insert(1, "run")
+            sys.argv.insert(2, "--csv")
+
     app()
 
 
