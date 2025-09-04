@@ -114,7 +114,7 @@ def test_entry_exit_timing():
     """
     print("🔍 Testing entry/exit timing...")
 
-    from backtest.mtf_exec import backtest_mtf_confluence, MTFExecCfg
+    from backtest.mtf_exec_fast import backtest_mtf_confluence_fast as backtest_mtf_confluence, MTFExecCfg
 
     df = create_trending_m1_data(n_days=5)
     params = MTFParams(min_confluence_score=0.5)  # Lower for more trades

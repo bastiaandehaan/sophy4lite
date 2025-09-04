@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(dir:*)", 
+      "Bash($env:PYTHONIOENCODING=\"utf-8\")",
+      "Bash(chcp:*)",
+      "Bash(claude --version)",
+      "Bash(pytest:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)"
+    ],
+    "deny": [],
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Write(**/config.py)",
+      "Edit(**/config.py)"
+    ],
+    "defaultMode": "default"
+  },
+  "includeCoAuthoredBy": true,
+  "cleanupPeriodDays": 30
+}
